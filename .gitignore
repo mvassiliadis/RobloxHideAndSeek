@@ -2,6 +2,10 @@
 /build.rbxl
 /build.rbxlx
 /sourcemap.json
+/match.rbxlx
+/lobby.rbxlx
+/match-sourcemap.json
+/lobby-sourcemap.json
 /Packages/
 
 # Local OS/editor files

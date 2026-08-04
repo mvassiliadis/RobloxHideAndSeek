@@ -1,4 +1,4 @@
-# Hide & Seek (proto.1)
+# Hide & Seek
 
 Development handoff and current-state reference for the Roblox experience. This file is intended to give a new chat enough context to continue development safely without reconstructing the project from conversation history.
 
@@ -6,15 +6,17 @@ Last live audit: **2026-08-04** using the connected Roblox Studio MCP, with Stud
 
 ## Important: source ownership
 
-The project now uses a hybrid Rojo workflow. Files in this repository are the source of truth for gameplay scripts, the round-state remote and attributes, the round HUD, and locked first-person camera configuration. The evolving 3D map, Lighting, Terrain, and other unlisted Studio instances remain authored in Roblox Studio.
+The experience now has separate Lobby and Match places and uses a hybrid Rojo workflow. Files in this repository are the source of truth for Match gameplay scripts, the round-state remote and attributes, the round HUD, and locked first-person camera configuration. The evolving 3D map, Lighting, Terrain, Lobby content, and other unlisted Studio instances remain authored in Roblox Studio.
 
-- `default.project.json` deliberately sets `$ignoreUnknownInstances` for Studio-owned services. Do not remove those safeguards unless the map has first been exported into filesystem-owned models.
-- `src/ServerScriptService/RoundController.server.luau` owns the server round controller.
-- `src/StarterGui/RoundApp.luau` owns the React-Lua HUD component and client behavior.
-- `src/StarterGui/RoundUI.client.luau` mounts the React tree.
-- `default.project.json` declares the React mount point, packages, and `ReplicatedStorage.RoundState` hierarchy.
+- `match.project.json` targets the Match place and declares the React mount point, packages, and `ReplicatedStorage.RoundState` hierarchy.
+- `lobby.project.json` targets the Lobby place and is intentionally minimal until lobby systems are implemented.
+- Both project files deliberately set `$ignoreUnknownInstances` for Studio-owned services. Do not remove those safeguards unless the corresponding place content has first been exported into filesystem-owned models.
+- `src/match/ServerScriptService/RoundController.server.luau` owns the server round controller.
+- `src/match/StarterGui/RoundApp.luau` owns the React-Lua HUD component and client behavior.
+- `src/match/StarterGui/RoundUI.client.luau` mounts the React tree.
+- Add future Lobby-owned scripts beneath `src/lobby/` and map them explicitly in `lobby.project.json`.
 - Studio changes still need to be saved or published by the developer.
-- Before modifying the game through MCP, list connected Studio instances and confirm that **Hide & Seek (proto.1)** is the active instance.
+- Before modifying either place through MCP, list connected Studio instances and confirm the active place by both name and Place ID.
 
 ## Rojo development
 
@@ -23,16 +25,28 @@ This repository pins Rojo 7.6.1 and Wally 0.3.2 with [Rokit](https://github.com/
 ```sh
 rokit install
 wally install
-rojo serve default.project.json
+rojo serve match.project.json
 ```
 
-In Studio, open the Rojo plugin, connect to `localhost:34872`, inspect the proposed changes, and sync. The project is restricted to place ID `98577386131530`, reducing the chance of connecting it to the wrong place.
+Open the corresponding place in Studio, then serve exactly one matching project file:
+
+```sh
+# Studio has Match (88216950471180) open
+rojo serve match.project.json
+
+# Studio has Lobby (98577386131530) open
+rojo serve lobby.project.json
+```
+
+In Studio, open the Rojo plugin, connect to `localhost:34872`, inspect the proposed changes, and sync. Each project is restricted to its own place ID, reducing the chance of connecting it to the wrong place. Both places do not need to be open simultaneously. If they are, run the two Rojo servers on different ports.
 
 Useful validation/build commands:
 
 ```sh
-rojo sourcemap default.project.json --output sourcemap.json
-rojo build default.project.json --output build.rbxlx
+rojo sourcemap match.project.json --output match-sourcemap.json
+rojo build match.project.json --output match.rbxlx
+rojo sourcemap lobby.project.json --output lobby-sourcemap.json
+rojo build lobby.project.json --output lobby.rbxlx
 ```
 
 The built place contains the filesystem-owned systems only; use live sync against the existing Studio place for normal development because the map is intentionally Studio-owned.
@@ -41,8 +55,9 @@ The built place contains the filesystem-owned systems only; use live sync agains
 
 | Field | Value |
 | --- | --- |
-| Studio/place name | `Hide & Seek (proto.1)` |
-| Place ID | `98577386131530` |
+| Experience | `Hide & Seek` |
+| Lobby place ID | `98577386131530` |
+| Match place ID | `88216950471180` |
 | Universe/Game ID | `10628256098` |
 | Current development stage | Early playable prototype |
 | Camera | Locked first person for all players |
@@ -288,7 +303,7 @@ The project has a round shell, not yet a complete hide-and-seek game. The follow
 
 1. Read this README.
 2. Use Roblox Studio MCP to list connected Studio instances.
-3. Confirm `Hide & Seek (proto.1)` is active and in Edit mode before modifications.
+3. Confirm the intended Lobby or Match place is active and in Edit mode before modifications.
 4. Read the filesystem-owned `RoundController.server.luau`, `RoundApp.luau`, and `RoundUI.client.luau`; do not treat Studio copies of Rojo-managed scripts as authoritative.
 5. Refresh `Workspace`, `ReplicatedStorage.RoundState`, and the target object before editing.
 6. Preserve map changes and avoid recreating named systems unless explicitly needed.

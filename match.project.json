@@ -1,7 +1,7 @@
 {
-  "name": "Hide & Seek (proto.1)",
-  "servePlaceIds": [98577386131530],
-  "placeId": 98577386131530,
+  "name": "Hide & Seek - Match",
+  "servePlaceIds": [88216950471180],
+  "placeId": 88216950471180,
   "gameId": 10628256098,
   "emitLegacyScripts": true,
   "tree": {
@@ -45,7 +45,7 @@
       "$className": "ServerScriptService",
       "$ignoreUnknownInstances": true,
       "RoundController": {
-        "$path": "src/ServerScriptService/RoundController.server.luau"
+        "$path": "src/match/ServerScriptService/RoundController.server.luau"
       }
     },
 
@@ -78,10 +78,10 @@
           }
         },
         "RoundApp": {
-          "$path": "src/StarterGui/RoundApp.luau"
+          "$path": "src/match/StarterGui/RoundApp.luau"
         },
         "RoundUI": {
-          "$path": "src/StarterGui/RoundUI.client.luau"
+          "$path": "src/match/StarterGui/RoundUI.client.luau"
         }
       }
     }

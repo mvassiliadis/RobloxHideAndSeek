@@ -1,0 +1,40 @@
+{
+  "name": "Hide & Seek - Lobby",
+  "servePlaceIds": [98577386131530],
+  "placeId": 98577386131530,
+  "gameId": 10628256098,
+  "emitLegacyScripts": true,
+  "tree": {
+    "$className": "DataModel",
+
+    "Workspace": {
+      "$className": "Workspace",
+      "$ignoreUnknownInstances": true
+    },
+
+    "Lighting": {
+      "$className": "Lighting",
+      "$ignoreUnknownInstances": true
+    },
+
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "$ignoreUnknownInstances": true
+    },
+
+    "ServerScriptService": {
+      "$className": "ServerScriptService",
+      "$ignoreUnknownInstances": true
+    },
+
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "$ignoreUnknownInstances": true
+    },
+
+    "StarterGui": {
+      "$className": "StarterGui",
+      "$ignoreUnknownInstances": true
+    }
+  }
+}
