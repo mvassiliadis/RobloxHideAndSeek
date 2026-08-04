@@ -1,0 +1,89 @@
+{
+  "name": "Hide & Seek (proto.1)",
+  "servePlaceIds": [98577386131530],
+  "placeId": 98577386131530,
+  "gameId": 10628256098,
+  "emitLegacyScripts": true,
+  "tree": {
+    "$className": "DataModel",
+
+    "Workspace": {
+      "$className": "Workspace",
+      "$ignoreUnknownInstances": true
+    },
+
+    "Lighting": {
+      "$className": "Lighting",
+      "$ignoreUnknownInstances": true
+    },
+
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "$ignoreUnknownInstances": true,
+      "Packages": {
+        "$path": "Packages"
+      },
+      "RoundState": {
+        "$className": "Folder",
+        "$ignoreUnknownInstances": false,
+        "$properties": {
+          "Attributes": {
+            "Phase": { "String": "WaitingToStart" },
+            "TimeRemaining": { "Float64": 0 },
+            "RoundNumber": { "Float64": 0 },
+            "HidingDuration": { "Float64": 30 },
+            "ActivationDistance": { "Float64": 4 }
+          }
+        },
+        "ResetRequested": {
+          "$className": "RemoteEvent"
+        }
+      }
+    },
+
+    "ServerScriptService": {
+      "$className": "ServerScriptService",
+      "$ignoreUnknownInstances": true,
+      "RoundController": {
+        "$path": "src/ServerScriptService/RoundController.server.luau"
+      }
+    },
+
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "$ignoreUnknownInstances": true,
+      "$properties": {
+        "CameraMode": "LockFirstPerson"
+      }
+    },
+
+    "StarterGui": {
+      "$className": "StarterGui",
+      "$ignoreUnknownInstances": true,
+      "RoundGui": {
+        "$className": "ScreenGui",
+        "$ignoreUnknownInstances": false,
+        "$properties": {
+          "DisplayOrder": 10,
+          "ResetOnSpawn": false,
+          "ZIndexBehavior": "Sibling"
+        },
+        "ReactRoot": {
+          "$className": "Frame",
+          "$ignoreUnknownInstances": true,
+          "$properties": {
+            "BackgroundTransparency": 1,
+            "BorderSizePixel": 0,
+            "Size": { "UDim2": [[1, 0], [1, 0]] }
+          }
+        },
+        "RoundApp": {
+          "$path": "src/StarterGui/RoundApp.luau"
+        },
+        "RoundUI": {
+          "$path": "src/StarterGui/RoundUI.client.luau"
+        }
+      }
+    }
+  }
+}
