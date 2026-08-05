@@ -47,7 +47,7 @@ No test framework or coverage threshold is configured. Before submitting changes
 
 History currently contains only `Initial commit`, so no established convention exists. Use short, imperative subjects such as `Fix reset debounce` or `Add seeker timer`. Keep commits focused. Pull requests should explain behavior changes, list validation performed, link relevant issues, and include screenshots or video for UI/map changes. Call out any required Studio-side edits or publishing steps.
 
-Do not create pull requests unless the user explicitly requests one. For commit-and-push requests, use Git directly to commit and push the current branch.
+Do not create pull requests unless the user explicitly requests one. For all repository operations, use Git directly and do not use the GitHub CLI (`gh`) unless the user explicitly requests it. For commit-and-push requests, commit and push the current branch with Git.
 
 ## Configuration Safety
 
