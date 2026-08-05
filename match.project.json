@@ -32,6 +32,10 @@
             "TimeRemaining": { "Float64": 0 },
             "StartTimeRemaining": { "Float64": 0 },
             "ConnectedPlayers": { "Float64": 0 },
+            "RoleSelectionDuration": { "Float64": 5 },
+            "RoleSelectionEndTime": { "Float64": 0 },
+            "SelectionUserIds": { "String": "" },
+            "SelectedSeekerUserId": { "Float64": 0 },
             "RoundNumber": { "Float64": 0 },
             "HidingDuration": { "Float64": 30 }
           }

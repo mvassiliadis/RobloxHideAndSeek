@@ -5,6 +5,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
 
 local packages = ReplicatedStorage:WaitForChild("Packages")
 local React = require(packages:WaitForChild("React"))
@@ -22,6 +23,8 @@ local NORMAL_TIMER_COLOR = Color3.fromRGB(255, 255, 255)
 local WARNING_TIMER_COLOR = Color3.fromRGB(255, 105, 105)
 local DEFAULT_GUIDE_COLOR = Color3.fromRGB(222, 230, 241)
 local CURSOR_GUIDE_COLOR = Color3.fromRGB(255, 220, 130)
+local SELECTION_ACCENT_COLOR = Color3.fromRGB(255, 196, 74)
+local SELECTION_DIM_COLOR = Color3.fromRGB(82, 91, 110)
 
 local DEFAULT_GUIDE_TEXT = "WASD  MOVE   •   MOUSE  LOOK\nHOLD ALT  CURSOR   •   HOLD R  RESET"
 local CURSOR_GUIDE_TEXT = "CURSOR ACTIVE\nRELEASE ALT TO LOOK"
@@ -43,11 +46,32 @@ local GOTHAM_MEDIUM = Font.new(
 	Enum.FontStyle.Normal
 )
 
+local function parseUserIds(serializedUserIds: unknown): { number }
+	local userIds: { number } = {}
+	if typeof(serializedUserIds) ~= "string" then
+		return userIds
+	end
+
+	for serializedUserId in string.gmatch(serializedUserIds, "[^,]+") do
+		local userId = tonumber(serializedUserId)
+		if userId then
+			table.insert(userIds, userId)
+		end
+	end
+
+	return userIds
+end
+
 local function RoundApp()
 	local phase, setPhase = React.useState(roundState:GetAttribute("Phase"))
 	local timeRemaining, setTimeRemaining = React.useState(roundState:GetAttribute("TimeRemaining"))
 	local connectedPlayers, setConnectedPlayers = React.useState(roundState:GetAttribute("ConnectedPlayers"))
 	local startTimeRemaining, setStartTimeRemaining = React.useState(roundState:GetAttribute("StartTimeRemaining"))
+	local selectionUserIds, setSelectionUserIds = React.useState(roundState:GetAttribute("SelectionUserIds"))
+	local selectedSeekerUserId, setSelectedSeekerUserId = React.useState(roundState:GetAttribute("SelectedSeekerUserId"))
+	local roleSelectionDuration, setRoleSelectionDuration = React.useState(roundState:GetAttribute("RoleSelectionDuration"))
+	local roleSelectionEndTime, setRoleSelectionEndTime = React.useState(roundState:GetAttribute("RoleSelectionEndTime"))
+	local selectionIndex, setSelectionIndex = React.useState(1)
 	local role, setRole = React.useState(localPlayer:GetAttribute("Role"))
 	local buttonText, setButtonText = React.useState("RESET ROUND")
 	local cursorActive, setCursorActive = React.useState(false)
@@ -174,6 +198,18 @@ local function RoundApp()
 			roundState:GetAttributeChangedSignal("StartTimeRemaining"):Connect(function()
 				setStartTimeRemaining(roundState:GetAttribute("StartTimeRemaining"))
 			end),
+			roundState:GetAttributeChangedSignal("SelectionUserIds"):Connect(function()
+				setSelectionUserIds(roundState:GetAttribute("SelectionUserIds"))
+			end),
+			roundState:GetAttributeChangedSignal("SelectedSeekerUserId"):Connect(function()
+				setSelectedSeekerUserId(roundState:GetAttribute("SelectedSeekerUserId"))
+			end),
+			roundState:GetAttributeChangedSignal("RoleSelectionDuration"):Connect(function()
+				setRoleSelectionDuration(roundState:GetAttribute("RoleSelectionDuration"))
+			end),
+			roundState:GetAttributeChangedSignal("RoleSelectionEndTime"):Connect(function()
+				setRoleSelectionEndTime(roundState:GetAttribute("RoleSelectionEndTime"))
+			end),
 			localPlayer:GetAttributeChangedSignal("Role"):Connect(function()
 				setRole(localPlayer:GetAttribute("Role"))
 			end),
@@ -219,11 +255,51 @@ local function RoundApp()
 	local numericTimeRemaining = if typeof(timeRemaining) == "number" then timeRemaining else 0
 	local numericConnectedPlayers = if typeof(connectedPlayers) == "number" then connectedPlayers else 0
 	local numericStartTimeRemaining = if typeof(startTimeRemaining) == "number" then startTimeRemaining else 0
+	local numericSelectedSeekerUserId = if typeof(selectedSeekerUserId) == "number" then selectedSeekerUserId else 0
+	local numericRoleSelectionDuration = if typeof(roleSelectionDuration) == "number" then roleSelectionDuration else 5
+	local numericRoleSelectionEndTime = if typeof(roleSelectionEndTime) == "number" then roleSelectionEndTime else 0
+	local selectionCandidates = parseUserIds(selectionUserIds)
 	local waiting = phase == "WaitingToStart"
 	local starting = waiting and numericConnectedPlayers >= 2 and numericStartTimeRemaining > 0
+	local selecting = phase == "SelectingRoles"
 	local seeking = phase == "Seeking"
-	local timerVisible = not waiting and not seeking
+	local timerVisible = phase == "Hiding"
 	local timerWarning = timerVisible and numericTimeRemaining <= 5 and numericTimeRemaining > 0
+
+	React.useEffect(function()
+		if not selecting or #selectionCandidates == 0 then
+			setSelectionIndex(1)
+			return
+		end
+
+		local targetIndex = table.find(selectionCandidates, numericSelectedSeekerUserId) or 1
+		local fullCycles = math.max(3, math.ceil(18 / #selectionCandidates))
+		local totalSteps = fullCycles * #selectionCandidates + targetIndex - 1
+		local connection: RBXScriptConnection?
+
+		local function updateSelection()
+			local timeRemaining = math.max(0, numericRoleSelectionEndTime - Workspace:GetServerTimeNow())
+			local progress = 1 - math.clamp(timeRemaining / math.max(0.1, numericRoleSelectionDuration), 0, 1)
+			local easedProgress = 1 - (1 - progress) ^ 2
+			local step = math.min(totalSteps, math.floor(easedProgress * (totalSteps + 1)))
+			setSelectionIndex((step % #selectionCandidates) + 1)
+		end
+
+		updateSelection()
+		connection = RunService.Heartbeat:Connect(updateSelection)
+
+		return function()
+			if connection then
+				connection:Disconnect()
+			end
+		end
+	end, {
+		selecting,
+		selectionUserIds,
+		numericSelectedSeekerUserId,
+		numericRoleSelectionDuration,
+		numericRoleSelectionEndTime,
+	})
 
 	React.useEffect(function()
 		local pulseScale = pulseScaleRef.current
@@ -254,6 +330,8 @@ local function RoundApp()
 		then "ROUND STARTING"
 		elseif waiting
 		then "WAITING FOR PLAYERS"
+		elseif selecting
+		then "CHOOSING THE SEEKER"
 		elseif seeking
 		then if role == "Seeker"
 			then "FIND THEM!"
@@ -282,6 +360,113 @@ local function RoundApp()
 		then HIDING_COLOR
 		else Color3.fromRGB(210, 216, 225)
 	local hasRole = roleText ~= ""
+	local compactSelectionCards = UserInputService.TouchEnabled
+	local selectionCardWidth = if compactSelectionCards then 54 else 86
+	local selectionAvatarSize = if compactSelectionCards then 42 else 72
+	local selectionCards = {
+		Layout = e("UIListLayout", {
+			FillDirection = Enum.FillDirection.Horizontal,
+			HorizontalAlignment = Enum.HorizontalAlignment.Center,
+			Padding = UDim.new(0, if compactSelectionCards then 6 else 12),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+			VerticalAlignment = Enum.VerticalAlignment.Center,
+		}),
+	}
+
+	for index, userId in selectionCandidates do
+		local highlighted = index == selectionIndex
+		local candidatePlayer: Player? = nil
+		for _, connectedPlayer in Players:GetPlayers() do
+			if connectedPlayer.UserId == userId then
+				candidatePlayer = connectedPlayer
+				break
+			end
+		end
+
+		local fallbackText = "?"
+		if userId < 0 then
+			local studioPlayerNumber = if candidatePlayer then string.match(candidatePlayer.Name, "(%d+)$") else nil
+			fallbackText = `P{studioPlayerNumber or math.abs(userId)}`
+		elseif candidatePlayer then
+			local studioPlayerNumber = string.match(candidatePlayer.Name, "(%d+)$")
+			fallbackText = if studioPlayerNumber and candidatePlayer.DisplayName == ""
+				then `P{studioPlayerNumber}`
+				else string.upper(string.sub(candidatePlayer.DisplayName, 1, 1))
+		end
+
+		selectionCards[`Candidate{userId}`] = e("Frame", {
+			BackgroundColor3 = if highlighted then SELECTION_ACCENT_COLOR else SELECTION_DIM_COLOR,
+			BackgroundTransparency = if highlighted then 0.05 else 0.48,
+			BorderSizePixel = 0,
+			LayoutOrder = index,
+			Size = UDim2.fromOffset(selectionCardWidth, 104),
+			ZIndex = 7,
+		}, {
+			Scale = e("UIScale", {
+				Scale = if highlighted then 1.12 else 0.88,
+			}),
+			Corner = e("UICorner", {
+				CornerRadius = UDim.new(0, 14),
+			}),
+			Stroke = e("UIStroke", {
+				Color = if highlighted then Color3.fromRGB(255, 236, 166) else Color3.fromRGB(125, 137, 158),
+				Thickness = if highlighted then 3 else 1,
+				Transparency = if highlighted then 0 else 0.55,
+			}),
+			AvatarFallback = e("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0),
+				BackgroundColor3 = if highlighted then Color3.fromRGB(29, 37, 53) else Color3.fromRGB(25, 32, 46),
+				BorderSizePixel = 0,
+				Position = UDim2.new(0.5, 0, 0, 7),
+				Size = UDim2.fromOffset(selectionAvatarSize, selectionAvatarSize),
+				ZIndex = 8,
+			}, {
+				Corner = e("UICorner", {
+					CornerRadius = UDim.new(1, 0),
+				}),
+				Initials = e("TextLabel", {
+					BackgroundTransparency = 1,
+					FontFace = GOTHAM_HEAVY,
+					Size = UDim2.fromScale(1, 1),
+					Text = fallbackText,
+					TextColor3 = if highlighted then SELECTION_ACCENT_COLOR else Color3.fromRGB(169, 179, 197),
+					TextScaled = true,
+					ZIndex = 9,
+				}, {
+					TextConstraint = e("UITextSizeConstraint", {
+						MaxTextSize = if compactSelectionCards then 20 else 30,
+						MinTextSize = 12,
+					}),
+				}),
+			}),
+			Avatar = e("ImageLabel", {
+				AnchorPoint = Vector2.new(0.5, 0),
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				Image = if userId > 0 then `rbxthumb://type=AvatarHeadShot&id={userId}&w=150&h=150` else "",
+				ImageColor3 = if highlighted then Color3.new(1, 1, 1) else Color3.fromRGB(170, 176, 188),
+				ImageTransparency = if highlighted then 0 else 0.3,
+				Position = UDim2.new(0.5, 0, 0, 7),
+				Size = UDim2.fromOffset(selectionAvatarSize, selectionAvatarSize),
+				ZIndex = 10,
+			}, {
+				Corner = e("UICorner", {
+					CornerRadius = UDim.new(1, 0),
+				}),
+			}),
+			PlayerTag = e("TextLabel", {
+				AnchorPoint = Vector2.new(0.5, 1),
+				BackgroundTransparency = 1,
+				FontFace = GOTHAM_BOLD,
+				Position = UDim2.new(0.5, 0, 1, -6),
+				Size = UDim2.new(1, -8, 0, 18),
+				Text = if userId == localPlayer.UserId then "YOU" else "",
+				TextColor3 = if highlighted then Color3.fromRGB(31, 37, 48) else Color3.fromRGB(221, 226, 235),
+				TextSize = 12,
+				ZIndex = 8,
+			}),
+		})
+	end
 
 	return e(React.Fragment, nil, {
 		PhaseLabel = e("TextLabel", {
@@ -296,6 +481,7 @@ local function RoundApp()
 			TextStrokeColor3 = Color3.fromRGB(10, 18, 28),
 			TextStrokeTransparency = 0.35,
 			TextWrapped = true,
+			Visible = not selecting,
 			ZIndex = 2,
 		}, {
 			UITextSizeConstraint = e("UITextSizeConstraint", {
@@ -340,6 +526,74 @@ local function RoundApp()
 			ZIndex = 2,
 		}),
 
+		SelectionOverlay = e("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			BackgroundColor3 = Color3.fromRGB(12, 18, 29),
+			BackgroundTransparency = 0.08,
+			BorderSizePixel = 0,
+			Position = UDim2.new(0.5, 0, 0.42, 0),
+			Size = UDim2.new(if compactSelectionCards then 0.92 else 0.82, 0, 0, 250),
+			Visible = selecting,
+			ZIndex = 5,
+		}, {
+			SizeConstraint = e("UISizeConstraint", {
+				MaxSize = Vector2.new(620, 250),
+				MinSize = Vector2.new(300, 230),
+			}),
+			Corner = e("UICorner", {
+				CornerRadius = UDim.new(0, 22),
+			}),
+			Stroke = e("UIStroke", {
+				Color = SELECTION_ACCENT_COLOR,
+				Thickness = 2,
+				Transparency = 0.15,
+			}),
+			Gradient = e("UIGradient", {
+				Color = ColorSequence.new({
+					ColorSequenceKeypoint.new(0, Color3.fromRGB(31, 40, 61)),
+					ColorSequenceKeypoint.new(1, Color3.fromRGB(12, 18, 29)),
+				}),
+				Rotation = 90,
+			}),
+			Title = e("TextLabel", {
+				AnchorPoint = Vector2.new(0.5, 0),
+				BackgroundTransparency = 1,
+				FontFace = GOTHAM_HEAVY,
+				Position = UDim2.new(0.5, 0, 0, 20),
+				Size = UDim2.new(1, -30, 0, 36),
+				Text = "WHO WILL SEEK?",
+				TextColor3 = SELECTION_ACCENT_COLOR,
+				TextScaled = true,
+				TextStrokeColor3 = Color3.fromRGB(6, 10, 18),
+				TextStrokeTransparency = 0.3,
+				ZIndex = 7,
+			}, {
+				TextConstraint = e("UITextSizeConstraint", {
+					MaxTextSize = 30,
+					MinTextSize = 20,
+				}),
+			}),
+			Subtitle = e("TextLabel", {
+				AnchorPoint = Vector2.new(0.5, 0),
+				BackgroundTransparency = 1,
+				FontFace = GOTHAM_MEDIUM,
+				Position = UDim2.new(0.5, 0, 0, 58),
+				Size = UDim2.new(1, -30, 0, 22),
+				Text = "THE ROULETTE IS SPINNING...",
+				TextColor3 = Color3.fromRGB(221, 227, 239),
+				TextSize = 14,
+				ZIndex = 7,
+			}),
+			CandidateStrip = e("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0),
+				BackgroundTransparency = 1,
+				ClipsDescendants = true,
+				Position = UDim2.new(0.5, 0, 0, 92),
+				Size = UDim2.new(1, -28, 0, 128),
+				ZIndex = 6,
+			}, selectionCards),
+		}),
+
 		RoleLabel = e("TextLabel", {
 			AnchorPoint = Vector2.new(0.5, 0),
 			BackgroundColor3 = Color3.fromRGB(15, 22, 34),
@@ -353,7 +607,7 @@ local function RoundApp()
 			TextSize = 20,
 			TextStrokeColor3 = Color3.fromRGB(8, 12, 20),
 			TextStrokeTransparency = 0.55,
-			Visible = hasRole,
+			Visible = hasRole and not selecting,
 			ZIndex = 2,
 		}, {
 			UICorner = e("UICorner", {

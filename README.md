@@ -64,12 +64,12 @@ The built place contains the filesystem-owned systems only; use live sync agains
 
 ## Current gameplay
 
-The game has a server-authoritative round state machine with three sequential phases:
+The game has a server-authoritative round state machine with four sequential phases:
 
 ```text
-WaitingToStart -> Hiding -> Seeking
-       ^                        |
-       +------ round reset -----+
+WaitingToStart -> SelectingRoles -> Hiding -> Seeking
+       ^                                      |
+       +------------ round reset -------------+
 ```
 
 ### 1. WaitingToStart
@@ -80,10 +80,20 @@ WaitingToStart -> Hiding -> Seeking
 - With at least two connected players, the HUD displays **ROUND STARTING** and the replicated five-second startup countdown.
 - A player joining or leaving while waiting cancels and restarts the countdown so direct Studio test clients have time to connect.
 - No world interaction, Lobby data, teleport data, or `SeekerSpot` proximity is required.
-- When the countdown expires, the server shuffles the connected roster, selects exactly one seeker and up to four hiders, assigns unique role spawns, and starts Hiding.
+- When the countdown expires, the server shuffles and locks the connected roster, selects exactly one seeker and up to four hiders, and begins the synchronized role-selection reveal.
 - If more than five players are connected, the remaining shuffled players become spectators at `WaitingSpawn`.
 
-### 2. Hiding
+### 2. SelectingRoles
+
+- The server chooses the authoritative seeker and role/spawn assignments before the animation, but does not replicate active-player `Role` attributes or move characters yet.
+- Every client receives the same shuffled candidate UserIds, selected seeker UserId, five-second duration, and server-clock end time.
+- The HUD replaces the normal phase display with an avatar-headshot roulette. Its highlight cycles rapidly, decelerates with quadratic ease-out, and lands on the server-selected seeker.
+- Player icons are loaded through Roblox avatar-thumbnail URLs; compact cards are used on touch devices.
+- Studio Server & Clients test players use synthetic negative UserIds with no Roblox avatar thumbnail. Their cards fall back to readable `P1`, `P2`, and similar badges; real players still show account headshots when thumbnails load.
+- When the five-second reveal ends, the server publishes roles, moves players to their assigned spawns, locks the seeker at the holding marker, and enters Hiding.
+- Reset, a seeker departure, or the final hider departing cancels the pending reveal through the same generation token used by other round work.
+
+### 3. Hiding
 
 - Default duration: **30 seconds**.
 - A large synchronized countdown appears at the top center of the screen.
@@ -92,7 +102,7 @@ WaitingToStart -> Hiding -> Seeking
 - While Hiding, the server anchors the seeker's `HumanoidRootPart` at the holding marker so temporary or open holding areas cannot be escaped. The root is unanchored before release, on reset, and when assignments are cleared.
 - When the countdown finishes, the server moves the seeker to `SeekerReleaseSpawn` and changes the phase to `Seeking`.
 
-### 3. Seeking
+### 4. Seeking
 
 - The HUD displays **SEEKING**.
 - The countdown is hidden.
@@ -148,6 +158,10 @@ Select `ReplicatedStorage.RoundState` in Studio and edit its attributes:
 | `TimeRemaining` | `0` | Replicated Hiding countdown. Runtime-owned by the server. |
 | `StartTimeRemaining` | `0` | Replicated automatic-start countdown. Runtime-owned by the server. |
 | `ConnectedPlayers` | `0` | Replicated connected-player count for waiting HUD feedback. Runtime-owned by the server. |
+| `RoleSelectionDuration` | `5` | Replicated roulette duration in seconds. Runtime-owned by the server constant. |
+| `RoleSelectionEndTime` | `0` | Server-clock deadline used to synchronize roulette animation. Runtime-owned by the server. |
+| `SelectionUserIds` | empty | Comma-separated candidate UserIds in shuffled display order. Runtime-owned by the server. |
+| `SelectedSeekerUserId` | `0` | Server-selected roulette target. Runtime-owned by the server. |
 | `RoundNumber` | `0` in Edit mode | Incremented whenever a round is initialized or reset. |
 | `HidingDuration` | `30` | Hiding duration in seconds. Minimum effective value is 1. |
 
@@ -156,6 +170,7 @@ Other constants currently live in scripts:
 - Minimum players: `2` in `RoundController`.
 - Maximum hiders: `4`; maximum active round players: `5` in `RoundController`.
 - Automatic-start delay: `5` seconds in `RoundController`.
+- Role-selection reveal: `5` seconds in `RoundController`.
 - Server reset debounce: `1` second in `RoundController`.
 - Desktop `R` hold duration: `1` second in `RoundApp`.
 
@@ -166,7 +181,9 @@ ReplicatedStorage
 ├── Packages (Wally-managed React dependencies)
 └── RoundState (Folder)
     ├── attributes: Phase, TimeRemaining, StartTimeRemaining,
-    │              ConnectedPlayers, RoundNumber, HidingDuration
+    │              ConnectedPlayers, RoleSelectionDuration,
+    │              RoleSelectionEndTime, SelectionUserIds,
+    │              SelectedSeekerUserId, RoundNumber, HidingDuration
     └── ResetRequested (RemoteEvent)
 
 ServerScriptService
@@ -181,7 +198,7 @@ StarterGui
     ├── RoundApp (ModuleScript)
     └── RoundUI (LocalScript bootstrap)
 
-During Play, React creates `PhaseLabel`, `TimerLabel`, `StatusLabel`, `ResetButton`, and `ControlsGuide` beneath `ReactRoot`.
+During Play, React creates the normal phase/role/timer HUD plus `SelectionOverlay`, its roulette candidate cards, `ResetButton`, and `ControlsGuide` beneath `ReactRoot`.
 
 Workspace
 ├── Terrain
@@ -208,7 +225,7 @@ Responsibilities:
 
 - Own all authoritative phase transitions.
 - Validate the Studio-owned `RoundSpawns` hierarchy and normalize markers to anchored, invisible, non-collidable, non-touchable, non-queryable parts.
-- Run and cancel automatic-start and Hiding countdowns using one generation token.
+- Run and cancel automatic-start, role-selection, and Hiding countdown work using one generation token.
 - Shuffle the roster with one server-created `Random`, assign one seeker, up to four hiders, and any overflow spectators, and replicate each role through the player's `Role` attribute.
 - Keep authoritative role and hider-spawn assignments on the server, including unique shuffled hider markers.
 - Reposition characters on assignment and respawn using each marker's full `CFrame` plus a small vertical offset.
@@ -226,6 +243,7 @@ Responsibilities:
 - Show/hide the Hiding timer and distinguish waiting-for-players from automatic-start countdown state.
 - Display the local player's replicated assignment as `You are the seeker`, `You are hiding`, or `You are spectating` throughout the active round.
 - Show role-specific phase prompts: seekers see `WAIT FOR PLAYERS TO HIDE` then `FIND THEM!`; hiders see `GO HIDE!` then `STAY OUT OF SIGHT OF THE SEEKER`.
+- Render the synchronized avatar roulette during `SelectingRoles`, with a server-clock-driven ease-out that lands on the authoritative seeker.
 - Pulse the final five countdown values.
 - Send reset requests from the reset button or held `R` key.
 - Manage Alt-based desktop cursor interaction.
@@ -281,6 +299,7 @@ Use Studio's **Server & Clients** test mode with two through five clients. The f
 - One client remains in `WaitingToStart` indefinitely and every waiting character uses `WaitingSpawn`.
 - Two through five clients produce exactly one `Seeker`, between one and four `Hider` attributes, no spectators, and unique hider marker assignments.
 - A waiting roster change restarts the startup countdown; dropping below two cancels it.
+- After startup, all clients show the same candidate icons for five seconds, slow onto the selected seeker, and receive no active role attribute until the reveal completes.
 - The seeker begins at `SeekerHoldingSpawn` and moves to `SeekerReleaseSpawn` before Seeking begins.
 - A reset clears role attributes, moves everyone to `WaitingSpawn`, and automatically schedules a fresh random selection when at least two players remain.
 - Respawning returns a participant to the spawn appropriate for their current role and phase.

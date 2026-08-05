@@ -8,8 +8,10 @@ local MIN_PLAYERS = 2
 local MAX_HIDERS = 4
 local MAX_ROUND_PLAYERS = 1 + MAX_HIDERS
 local AUTOMATIC_START_DELAY = 5
+local ROLE_SELECTION_DURATION = 5
 
 local WAITING_PHASE = "WaitingToStart"
+local SELECTING_PHASE = "SelectingRoles"
 local HIDING_PHASE = "Hiding"
 local SEEKING_PHASE = "Seeking"
 local SEEKER_ROLE = "Seeker"
@@ -100,6 +102,16 @@ local function shuffledCopy<T>(items: { T }): { T }
 	end
 
 	return shuffled
+end
+
+local function serializeUserIds(players: { Player }): string
+	local userIds: { string } = {}
+
+	for _, player in players do
+		table.insert(userIds, tostring(player.UserId))
+	end
+
+	return table.concat(userIds, ",")
 end
 
 local function getConnectedPlayers(excludedPlayer: Player?): { Player }
@@ -218,7 +230,30 @@ local function runHidingPhase(thisGeneration: number)
 	roundState:SetAttribute("Phase", SEEKING_PHASE)
 end
 
-local function startRound(thisGeneration: number)
+local function finishRoleSelection(thisGeneration: number)
+	if thisGeneration ~= generation or roundState:GetAttribute("Phase") ~= SELECTING_PHASE then
+		return
+	end
+
+	for player, role in roleAssignments do
+		if player.Parent == Players then
+			player:SetAttribute("Role", role)
+		end
+	end
+
+	movePlayersToAssignedSpawns(nil)
+	roundState:SetAttribute("Phase", HIDING_PHASE)
+	if seekerPlayer then
+		movePlayerToAssignedSpawn(seekerPlayer)
+	end
+	roundState:SetAttribute("TimeRemaining", getHidingDuration())
+	roundState:SetAttribute("RoleSelectionEndTime", 0)
+	roundState:SetAttribute("SelectionUserIds", "")
+	roundState:SetAttribute("SelectedSeekerUserId", 0)
+	task.spawn(runHidingPhase, thisGeneration)
+end
+
+local function beginRoleSelection(thisGeneration: number)
 	if thisGeneration ~= generation or roundState:GetAttribute("Phase") ~= WAITING_PHASE then
 		return
 	end
@@ -232,6 +267,7 @@ local function startRound(thisGeneration: number)
 
 	clearAssignments()
 	local shuffledPlayers = shuffledCopy(connectedPlayers)
+	local roulettePlayers = shuffledCopy(connectedPlayers)
 	local shuffledHiderSpawns = shuffledCopy(hiderSpawns)
 	local activePlayerCount = math.min(#shuffledPlayers, MAX_ROUND_PLAYERS)
 
@@ -248,17 +284,19 @@ local function startRound(thisGeneration: number)
 		end
 
 		roleAssignments[player] = role
-		player:SetAttribute("Role", role)
 	end
 
 	roundState:SetAttribute("StartTimeRemaining", 0)
-	movePlayersToAssignedSpawns(nil)
-	roundState:SetAttribute("Phase", HIDING_PHASE)
-	if seekerPlayer then
-		movePlayerToAssignedSpawn(seekerPlayer)
-	end
-	roundState:SetAttribute("TimeRemaining", getHidingDuration())
-	task.spawn(runHidingPhase, thisGeneration)
+	roundState:SetAttribute("TimeRemaining", 0)
+	roundState:SetAttribute("RoleSelectionDuration", ROLE_SELECTION_DURATION)
+	roundState:SetAttribute("SelectionUserIds", serializeUserIds(roulettePlayers))
+	roundState:SetAttribute("SelectedSeekerUserId", (seekerPlayer :: Player).UserId)
+	roundState:SetAttribute("RoleSelectionEndTime", Workspace:GetServerTimeNow() + ROLE_SELECTION_DURATION)
+	roundState:SetAttribute("Phase", SELECTING_PHASE)
+
+	task.delay(ROLE_SELECTION_DURATION, function()
+		finishRoleSelection(thisGeneration)
+	end)
 end
 
 scheduleAutomaticStart = function(excludedPlayer: Player?)
@@ -292,7 +330,7 @@ scheduleAutomaticStart = function(excludedPlayer: Player?)
 			return
 		end
 
-		startRound(thisGeneration)
+		beginRoleSelection(thisGeneration)
 	end)
 end
 
@@ -308,6 +346,9 @@ resetRound = function(excludedPlayer: Player?)
 	roundState:SetAttribute("RoundNumber", currentRound + 1)
 	roundState:SetAttribute("TimeRemaining", 0)
 	roundState:SetAttribute("StartTimeRemaining", 0)
+	roundState:SetAttribute("RoleSelectionEndTime", 0)
+	roundState:SetAttribute("SelectionUserIds", "")
+	roundState:SetAttribute("SelectedSeekerUserId", 0)
 	roundState:SetAttribute("Phase", WAITING_PHASE)
 	updateConnectedPlayers(excludedPlayer)
 	movePlayersToAssignedSpawns(excludedPlayer)
@@ -394,6 +435,10 @@ end)
 
 roundState:SetAttribute("ConnectedPlayers", 0)
 roundState:SetAttribute("StartTimeRemaining", 0)
+roundState:SetAttribute("RoleSelectionDuration", ROLE_SELECTION_DURATION)
+roundState:SetAttribute("RoleSelectionEndTime", 0)
+roundState:SetAttribute("SelectionUserIds", "")
+roundState:SetAttribute("SelectedSeekerUserId", 0)
 for _, player in Players:GetPlayers() do
 	setupPlayer(player)
 end
