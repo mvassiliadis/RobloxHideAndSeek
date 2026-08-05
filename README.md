@@ -84,7 +84,7 @@ WaitingToStart -> SelectingRoles -> Hiding -> Seeking
 - A player joining or leaving while waiting cancels and restarts the countdown so direct Studio test clients have time to connect.
 - No world interaction, Lobby data, teleport data, or `SeekerSpot` proximity is required.
 - When the countdown expires, the server shuffles and locks the connected roster, selects exactly one seeker and up to four hiders, and begins the synchronized role-selection reveal.
-- If more than five players are connected, the remaining shuffled players become spectators at `WaitingSpawn`.
+- If more than five players are connected, the remaining shuffled players become spectators around `WaitingSpawn`.
 
 ### 2. SelectingRoles
 
@@ -101,9 +101,9 @@ WaitingToStart -> SelectingRoles -> Hiding -> Seeking
 - Default duration: **30 seconds**.
 - A large synchronized countdown appears at the top center of the screen.
 - The last five seconds turn red and pulse.
-- The seeker waits at `SeekerHoldingSpawn`; hiders occupy unique, shuffled markers beneath `HiderSpawns`; spectators remain at `WaitingSpawn`.
+- The seeker waits at `SeekerHoldingSpawn`; hiders occupy unique, shuffled markers beneath `HiderSpawns`; spectators remain in distinct slots around `WaitingSpawn`.
 - While Hiding, the server anchors the seeker's `HumanoidRootPart` at the holding marker so temporary or open holding areas cannot be escaped. The root is unanchored before release, on reset, and when assignments are cleared.
-- When the countdown finishes, the server moves the seeker to `SeekerReleaseSpawn` and changes the phase to `Seeking`.
+- When the countdown finishes, the server releases the seeker in place at `SeekerHoldingSpawn` and changes the phase to `Seeking`.
 
 ### 4. Seeking
 
@@ -111,14 +111,14 @@ WaitingToStart -> SelectingRoles -> Hiding -> Seeking
 - The countdown is hidden.
 - This phase currently lasts indefinitely.
 - The only way to leave Seeking is to reset the round.
-- Late joiners become spectators and are kept at `WaitingSpawn` rather than joining the active round.
+- Late joiners become spectators and are kept in distinct slots around `WaitingSpawn` rather than joining the active round.
 
 ### Reset behavior
 
 - Any player can reset because all current users are treated as playtesters.
 - Resets are sent to the server through `ResetRequested` and are debounced for one second.
 - Reset increments `RoundNumber` and the controller generation, cancelling either startup or Hiding countdown work.
-- It clears server role/spawn assignments and every player's replicated `Role` attribute, resets both timers, returns remaining characters to `WaitingSpawn`, and enters `WaitingToStart`.
+- It clears server role/spawn assignments and every player's replicated `Role` attribute, resets both timers, spreads remaining characters around `WaitingSpawn`, and enters `WaitingToStart`.
 - If at least two players remain, reset automatically schedules a completely new random role selection after the normal startup delay.
 - If the active seeker leaves, or the last active hider leaves, the server performs the same reset. One hider leaving while another remains does not end the round; spectators leaving have no round effect.
 
@@ -217,7 +217,6 @@ Workspace
 └── RoundSpawns (Folder or Model)
     ├── WaitingSpawn (BasePart)
     ├── SeekerHoldingSpawn (BasePart)
-    ├── SeekerReleaseSpawn (BasePart)
     └── HiderSpawns (Folder or Model)
         ├── Hider1 (BasePart)
         ├── Hider2 (BasePart)
@@ -235,6 +234,7 @@ Responsibilities:
 - Shuffle the roster with one server-created `Random`, assign one seeker, up to four hiders, and any overflow spectators, and replicate each role through the player's `Role` attribute.
 - Keep authoritative role and hider-spawn assignments on the server, including unique shuffled hider markers.
 - Reposition characters on assignment and respawn using each marker's full `CFrame` plus a small vertical offset.
+- Give every connected player a stable waiting-area slot on a six-stud grid around `WaitingSpawn`, reclaiming the slot when they leave.
 - Reset when the seeker or final hider leaves, while allowing rounds to continue after spectator departures or a non-final hider departure.
 - Replicate state through `RoundState` attributes.
 - Accept playtester reset requests with server-side debounce.
@@ -267,13 +267,12 @@ The connected Match place now contains the required marker hierarchy. The marker
 | --- | --- |
 | `WaitingSpawn` | `(0, 1, 0)` |
 | `SeekerHoldingSpawn` | `(0, 1, -15)` |
-| `SeekerReleaseSpawn` | `(0, 1, 15)` |
 | `Hider1` | `(-30, 1, 40)` |
 | `Hider2` | `(-10, 1, 40)` |
 | `Hider3` | `(10, 1, 40)` |
 | `Hider4` | `(30, 1, 40)` |
 
-- A map designer must deliberately reposition and orient all seven markers for the final waiting area, seeker enclosure/release point, and hiding map.
+- A map designer must deliberately reposition and orient all six markers for the final waiting area, seeker enclosure, and hiding map.
 - Marker `CFrame` orientation controls the direction a respawned character faces.
 - Every marker is currently a `4 x 1 x 4` anchored Part with transparency `1` and collision, touch, and query disabled.
 - `Workspace.Obstacles.SeekerSpotTriggerDecal` was removed from the connected Match place because it served only the obsolete activation boundary.
@@ -303,15 +302,15 @@ A one-client Play check on 2026-08-05 confirmed that the updated controller and 
 
 Use Studio's **Server & Clients** test mode with two through five clients. The five-second startup delay is specifically intended to absorb asynchronous test-client connections. Verify:
 
-- One client remains in `WaitingToStart` indefinitely and every waiting character uses `WaitingSpawn`.
+- One client remains in `WaitingToStart` indefinitely, and waiting characters occupy separate slots around `WaitingSpawn`.
 - Two through five clients produce exactly one `Seeker`, between one and four `Hider` attributes, no spectators, and unique hider marker assignments.
 - A waiting roster change restarts the startup countdown; dropping below two cancels it.
 - After startup, all clients show the same candidate icons for five seconds, slow onto the selected seeker, and receive no active role attribute until the reveal completes.
-- The seeker begins at `SeekerHoldingSpawn` and moves to `SeekerReleaseSpawn` before Seeking begins.
-- A reset clears role attributes, moves everyone to `WaitingSpawn`, and automatically schedules a fresh random selection when at least two players remain.
+- The seeker begins at `SeekerHoldingSpawn` and is unanchored there when Seeking begins.
+- A reset clears role attributes, spreads everyone around `WaitingSpawn`, and automatically schedules a fresh random selection when at least two players remain.
 - Respawning returns a participant to the spawn appropriate for their current role and phase.
 - A seeker departure or final-hider departure resets; one hider leaving while another remains continues; spectator departure does not affect the round.
-- Late joiners during Hiding or Seeking receive `Spectator` and stay at `WaitingSpawn`.
+- Late joiners during Hiding or Seeking receive `Spectator` and stay in separate slots around `WaitingSpawn`.
 - No transition depends on touching, approaching, or retaining `SeekerSpot`.
 
 For overflow testing above five players, verify that only five shuffled players are active and all remaining players are spectators. This exceeds the requested two-to-five-client baseline.

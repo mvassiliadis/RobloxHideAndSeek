@@ -19,6 +19,8 @@ local HIDER_ROLE = "Hider"
 local SPECTATOR_ROLE = "Spectator"
 local RESET_DEBOUNCE_SECONDS = 1
 local CHARACTER_SPAWN_OFFSET = 3
+local WAITING_SPAWN_COLUMNS = 4
+local WAITING_SPAWN_SPACING = 6
 
 type Role = "Seeker" | "Hider" | "Spectator"
 
@@ -57,7 +59,6 @@ end
 
 local waitingSpawn = getSpawnMarker("WaitingSpawn")
 local seekerHoldingSpawn = getSpawnMarker("SeekerHoldingSpawn")
-local seekerReleaseSpawn = getSpawnMarker("SeekerReleaseSpawn")
 local hiderSpawns: { BasePart } = {}
 
 for _, child in hiderSpawnsContainer:GetChildren() do
@@ -73,7 +74,6 @@ assert(
 
 configureSpawnMarker(waitingSpawn)
 configureSpawnMarker(seekerHoldingSpawn)
-configureSpawnMarker(seekerReleaseSpawn)
 for _, marker in hiderSpawns do
 	configureSpawnMarker(marker)
 end
@@ -82,6 +82,7 @@ local generation = 0
 local lastResetAt = 0
 local roleAssignments: { [Player]: Role } = {}
 local hiderSpawnAssignments: { [Player]: BasePart } = {}
+local waitingSpawnSlots: { [Player]: number } = {}
 local seekerPlayer: Player? = nil
 
 local function getHidingDuration(): number
@@ -151,10 +152,6 @@ end
 local function getAssignedSpawn(player: Player): BasePart
 	local role = roleAssignments[player]
 	if role == SEEKER_ROLE then
-		if roundState:GetAttribute("Phase") == SEEKING_PHASE then
-			return seekerReleaseSpawn
-		end
-
 		return seekerHoldingSpawn
 	elseif role == HIDER_ROLE then
 		return hiderSpawnAssignments[player] or waitingSpawn
@@ -163,8 +160,34 @@ local function getAssignedSpawn(player: Player): BasePart
 	return waitingSpawn
 end
 
-local function pivotCharacterToMarker(character: Model, marker: BasePart)
-	character:PivotTo(marker.CFrame * CFrame.new(0, CHARACTER_SPAWN_OFFSET, 0))
+local function getWaitingSpawnOffset(player: Player): Vector3
+	local assignedSlot = waitingSpawnSlots[player]
+	if not assignedSlot then
+		local occupiedSlots: { [number]: boolean } = {}
+		for _, slot in waitingSpawnSlots do
+			occupiedSlots[slot] = true
+		end
+
+		assignedSlot = 1
+		while occupiedSlots[assignedSlot] do
+			assignedSlot += 1
+		end
+		waitingSpawnSlots[player] = assignedSlot
+	end
+
+	local zeroBasedSlot = assignedSlot - 1
+	local column = zeroBasedSlot % WAITING_SPAWN_COLUMNS
+	local row = math.floor(zeroBasedSlot / WAITING_SPAWN_COLUMNS)
+	local xOffset = (column - (WAITING_SPAWN_COLUMNS - 1) / 2) * WAITING_SPAWN_SPACING
+	local zOffset = (row - 0.5) * WAITING_SPAWN_SPACING
+
+	return Vector3.new(xOffset, 0, zOffset)
+end
+
+local function pivotCharacterToAssignedSpawn(player: Player, character: Model)
+	local marker = getAssignedSpawn(player)
+	local waitingOffset = if marker == waitingSpawn then getWaitingSpawnOffset(player) else Vector3.zero
+	character:PivotTo(marker.CFrame * CFrame.new(waitingOffset.X, CHARACTER_SPAWN_OFFSET, waitingOffset.Z))
 end
 
 local function setCharacterLocked(character: Model, locked: boolean)
@@ -181,7 +204,7 @@ end
 local function movePlayerToAssignedSpawn(player: Player)
 	local character = player.Character
 	if character and character.Parent then
-		pivotCharacterToMarker(character, getAssignedSpawn(player))
+		pivotCharacterToAssignedSpawn(player, character)
 		setCharacterLocked(character, shouldLockPlayer(player))
 	end
 end
@@ -198,7 +221,7 @@ local function positionCharacterWhenReady(player: Player, character: Model)
 		return
 	end
 
-	pivotCharacterToMarker(character, getAssignedSpawn(player))
+	pivotCharacterToAssignedSpawn(player, character)
 	setCharacterLocked(character, shouldLockPlayer(player))
 end
 
@@ -224,7 +247,6 @@ local function runHidingPhase(thisGeneration: number)
 		local character = seekerPlayer.Character
 		if character and character.Parent then
 			setCharacterLocked(character, false)
-			pivotCharacterToMarker(character, seekerReleaseSpawn)
 		end
 	end
 	roundState:SetAttribute("Phase", SEEKING_PHASE)
@@ -390,6 +412,7 @@ Players.PlayerAdded:Connect(setupPlayer)
 
 Players.PlayerRemoving:Connect(function(player)
 	player:SetAttribute("Role", nil)
+	waitingSpawnSlots[player] = nil
 	local phase = roundState:GetAttribute("Phase")
 
 	if phase == WAITING_PHASE then
