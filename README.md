@@ -9,11 +9,13 @@ Last live audit: **2026-08-05** using the connected Roblox Studio MCP, with the 
 The experience now has separate Lobby and Match places and uses a hybrid Rojo workflow. Files in this repository are the source of truth for Match gameplay scripts, the round-state remote and attributes, the round HUD, and locked first-person camera configuration. The evolving 3D map, Lighting, Terrain, Lobby content, and other unlisted Studio instances remain authored in Roblox Studio.
 
 - `match.project.json` targets the Match place and declares the React mount point, packages, and `ReplicatedStorage.RoundState` hierarchy.
-- `lobby.project.json` targets the Lobby place and is intentionally minimal until lobby systems are implemented.
+- `lobby.project.json` targets the Lobby place and owns the temporary playtest teleport button, request remote, and server handler.
 - Both project files deliberately set `$ignoreUnknownInstances` for Studio-owned services. Do not remove those safeguards unless the corresponding place content has first been exported into filesystem-owned models.
 - `src/match/ServerScriptService/RoundController.server.luau` owns the server round controller.
 - `src/match/StarterGui/RoundApp.luau` owns the React-Lua HUD component and client behavior.
 - `src/match/StarterGui/RoundUI.client.luau` mounts the React tree.
+- `src/lobby/ServerScriptService/TestTeleport.server.luau` teleports the current Lobby roster to the Match place when requested.
+- `src/lobby/StarterGui/TestTeleport.client.luau` creates the temporary bottom-center teleport button.
 - Add future Lobby-owned scripts beneath `src/lobby/` and map them explicitly in `lobby.project.json`.
 - Studio changes still need to be saved or published by the developer.
 - Before modifying either place through MCP, list connected Studio instances and confirm the active place by both name and Place ID.

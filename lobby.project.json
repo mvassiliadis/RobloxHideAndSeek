@@ -19,12 +19,22 @@
 
     "ReplicatedStorage": {
       "$className": "ReplicatedStorage",
-      "$ignoreUnknownInstances": true
+      "$ignoreUnknownInstances": true,
+      "LobbyRemotes": {
+        "$className": "Folder",
+        "$ignoreUnknownInstances": false,
+        "TeleportAllRequested": {
+          "$className": "RemoteEvent"
+        }
+      }
     },
 
     "ServerScriptService": {
       "$className": "ServerScriptService",
-      "$ignoreUnknownInstances": true
+      "$ignoreUnknownInstances": true,
+      "TestTeleport": {
+        "$path": "src/lobby/ServerScriptService/TestTeleport.server.luau"
+      }
     },
 
     "StarterPlayer": {
@@ -34,7 +44,19 @@
 
     "StarterGui": {
       "$className": "StarterGui",
-      "$ignoreUnknownInstances": true
+      "$ignoreUnknownInstances": true,
+      "TestTeleportGui": {
+        "$className": "ScreenGui",
+        "$ignoreUnknownInstances": false,
+        "$properties": {
+          "DisplayOrder": 20,
+          "ResetOnSpawn": false,
+          "ZIndexBehavior": "Sibling"
+        },
+        "TestTeleport": {
+          "$path": "src/lobby/StarterGui/TestTeleport.client.luau"
+        }
+      }
     }
   }
 }
