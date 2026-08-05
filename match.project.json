@@ -42,6 +42,10 @@
         },
         "ResetRequested": {
           "$className": "RemoteEvent"
+        },
+
+        "ReturnToLobbyRequested": {
+          "$className": "RemoteEvent"
         }
       }
     },
@@ -51,6 +55,9 @@
       "$ignoreUnknownInstances": true,
       "RoundController": {
         "$path": "src/match/ServerScriptService/RoundController.server.luau"
+      },
+      "ReturnToLobby": {
+        "$path": "src/match/ServerScriptService/ReturnToLobby.server.luau"
       }
     },
 

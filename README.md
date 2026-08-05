@@ -14,6 +14,7 @@ The experience now has separate Lobby and Match places and uses a hybrid Rojo wo
 - `src/match/ServerScriptService/RoundController.server.luau` owns the server round controller.
 - `src/match/StarterGui/RoundApp.luau` owns the React-Lua HUD component and client behavior.
 - `src/match/StarterGui/RoundUI.client.luau` mounts the React tree.
+- `src/match/ServerScriptService/ReturnToLobby.server.luau` handles individual requests to return from Match to Lobby.
 - `src/lobby/ServerScriptService/TestTeleport.server.luau` teleports the current Lobby roster to the Match place when requested.
 - `src/lobby/StarterGui/TestTeleport.client.luau` creates the temporary bottom-center teleport button.
 - Add future Lobby-owned scripts beneath `src/lobby/` and map them explicitly in `lobby.project.json`.
@@ -131,6 +132,7 @@ WaitingToStart -> SelectingRoles -> Hiding -> Seeking
 - Release `Left Alt`: return to locked first-person mouse control.
 - Hold `R` for one second: reset the round. The hold requirement reduces accidental resets.
 - The **RESET ROUND** button is also available at the top right.
+- The smaller **BACK TO LOBBY** button beneath reset returns only the clicking player to the Lobby.
 
 ### Touch and gamepad
 
@@ -186,10 +188,12 @@ ReplicatedStorage
     │              ConnectedPlayers, RoleSelectionDuration,
     │              RoleSelectionEndTime, SelectionUserIds,
     │              SelectedSeekerUserId, RoundNumber, HidingDuration
-    └── ResetRequested (RemoteEvent)
+    ├── ResetRequested (RemoteEvent)
+    └── ReturnToLobbyRequested (RemoteEvent)
 
 ServerScriptService
-└── RoundController (Script)
+├── RoundController (Script)
+└── ReturnToLobby (Script)
 
 StarterPlayer
 └── CameraMode = LockFirstPerson
@@ -248,6 +252,7 @@ Responsibilities:
 - Render the synchronized avatar roulette during `SelectingRoles`, with a server-clock-driven ease-out that lands on the authoritative seeker.
 - Pulse the final five countdown values.
 - Send reset requests from the reset button or held `R` key.
+- Send individual return requests from the secondary **BACK TO LOBBY** button.
 - Manage Alt-based desktop cursor interaction.
 - Display the discreet bottom-left controls guide on keyboard devices.
 - Apply the macOS first-person cursor startup/respawn refresh.

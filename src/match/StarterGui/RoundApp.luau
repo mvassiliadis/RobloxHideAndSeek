@@ -12,6 +12,7 @@ local React = require(packages:WaitForChild("React"))
 
 local roundState = ReplicatedStorage:WaitForChild("RoundState")
 local resetRequested = roundState:WaitForChild("ResetRequested") :: RemoteEvent
+local returnToLobbyRequested = roundState:WaitForChild("ReturnToLobbyRequested") :: RemoteEvent
 local localPlayer = Players.LocalPlayer
 
 local e = React.createElement
@@ -74,10 +75,12 @@ local function RoundApp()
 	local selectionIndex, setSelectionIndex = React.useState(1)
 	local role, setRole = React.useState(localPlayer:GetAttribute("Role"))
 	local buttonText, setButtonText = React.useState("RESET ROUND")
+	local lobbyButtonText, setLobbyButtonText = React.useState("BACK TO LOBBY")
 	local cursorActive, setCursorActive = React.useState(false)
 
 	local mountedRef = React.useRef(false)
 	local resetPendingRef = React.useRef(false)
+	local returnPendingRef = React.useRef(false)
 	local rHeldRef = React.useRef(false)
 	local rHoldGenerationRef = React.useRef(0)
 	local altHeldRef = React.useRef(false)
@@ -152,6 +155,16 @@ local function RoundApp()
 		end)
 	end
 
+	local function requestReturnToLobby()
+		if returnPendingRef.current then
+			return
+		end
+
+		returnPendingRef.current = true
+		setLobbyButtonText("LEAVING...")
+		returnToLobbyRequested:FireServer()
+	end
+
 	local function beginKeyboardReset()
 		if resetPendingRef.current or rHeldRef.current then
 			return
@@ -212,6 +225,19 @@ local function RoundApp()
 			end),
 			localPlayer:GetAttributeChangedSignal("Role"):Connect(function()
 				setRole(localPlayer:GetAttribute("Role"))
+			end),
+			returnToLobbyRequested.OnClientEvent:Connect(function(status: string)
+				if status ~= "Failed" then
+					return
+				end
+
+				returnPendingRef.current = false
+				setLobbyButtonText("TELEPORT FAILED")
+				task.delay(2, function()
+					if mountedRef.current and not returnPendingRef.current then
+						setLobbyButtonText("BACK TO LOBBY")
+					end
+				end)
 			end),
 			UserInputService.InputBegan:Connect(function(input, gameProcessed)
 				if input.KeyCode == Enum.KeyCode.LeftAlt then
@@ -629,15 +655,15 @@ local function RoundApp()
 			FontFace = GOTHAM_BOLD,
 			Modal = cursorActive,
 			Position = UDim2.new(1, -20, 0, 20),
-			Size = UDim2.fromOffset(170, 46),
+			Size = UDim2.fromOffset(138, 34),
 			Text = buttonText,
 			TextColor3 = Color3.new(1, 1, 1),
-			TextSize = 16,
+			TextSize = 12,
 			ZIndex = 3,
 			[React.Event.Activated] = requestReset,
 		}, {
 			UICorner = e("UICorner", {
-				CornerRadius = UDim.new(0, 10),
+				CornerRadius = UDim.new(0, 8),
 			}),
 			UIStroke = e("UIStroke", {
 				ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
@@ -645,6 +671,33 @@ local function RoundApp()
 				LineJoinMode = Enum.LineJoinMode.Round,
 				Thickness = 2,
 				Transparency = 0.15,
+			}),
+		}),
+
+		ReturnToLobbyButton = e("TextButton", {
+			Active = not returnPendingRef.current,
+			AnchorPoint = Vector2.new(1, 0),
+			BackgroundColor3 = Color3.fromRGB(31, 40, 55),
+			BackgroundTransparency = 0.18,
+			BorderSizePixel = 0,
+			FontFace = GOTHAM_BOLD,
+			Position = UDim2.new(1, -20, 0, 64),
+			Size = UDim2.fromOffset(138, 34),
+			Text = lobbyButtonText,
+			TextColor3 = Color3.fromRGB(210, 220, 235),
+			TextSize = 12,
+			ZIndex = 3,
+			[React.Event.Activated] = requestReturnToLobby,
+		}, {
+			UICorner = e("UICorner", {
+				CornerRadius = UDim.new(0, 8),
+			}),
+			UIStroke = e("UIStroke", {
+				ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
+				Color = Color3.fromRGB(139, 164, 199),
+				LineJoinMode = Enum.LineJoinMode.Round,
+				Thickness = 1,
+				Transparency = 0.45,
 			}),
 		}),
 
