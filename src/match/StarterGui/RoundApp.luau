@@ -46,6 +46,9 @@ local GOTHAM_MEDIUM = Font.new(
 local function RoundApp()
 	local phase, setPhase = React.useState(roundState:GetAttribute("Phase"))
 	local timeRemaining, setTimeRemaining = React.useState(roundState:GetAttribute("TimeRemaining"))
+	local connectedPlayers, setConnectedPlayers = React.useState(roundState:GetAttribute("ConnectedPlayers"))
+	local startTimeRemaining, setStartTimeRemaining = React.useState(roundState:GetAttribute("StartTimeRemaining"))
+	local role, setRole = React.useState(localPlayer:GetAttribute("Role"))
 	local buttonText, setButtonText = React.useState("RESET ROUND")
 	local cursorActive, setCursorActive = React.useState(false)
 
@@ -165,6 +168,15 @@ local function RoundApp()
 			roundState:GetAttributeChangedSignal("TimeRemaining"):Connect(function()
 				setTimeRemaining(roundState:GetAttribute("TimeRemaining"))
 			end),
+			roundState:GetAttributeChangedSignal("ConnectedPlayers"):Connect(function()
+				setConnectedPlayers(roundState:GetAttribute("ConnectedPlayers"))
+			end),
+			roundState:GetAttributeChangedSignal("StartTimeRemaining"):Connect(function()
+				setStartTimeRemaining(roundState:GetAttribute("StartTimeRemaining"))
+			end),
+			localPlayer:GetAttributeChangedSignal("Role"):Connect(function()
+				setRole(localPlayer:GetAttribute("Role"))
+			end),
 			UserInputService.InputBegan:Connect(function(input, gameProcessed)
 				if input.KeyCode == Enum.KeyCode.LeftAlt then
 					altHeldRef.current = true
@@ -205,7 +217,10 @@ local function RoundApp()
 	end, {})
 
 	local numericTimeRemaining = if typeof(timeRemaining) == "number" then timeRemaining else 0
+	local numericConnectedPlayers = if typeof(connectedPlayers) == "number" then connectedPlayers else 0
+	local numericStartTimeRemaining = if typeof(startTimeRemaining) == "number" then startTimeRemaining else 0
 	local waiting = phase == "WaitingToStart"
+	local starting = waiting and numericConnectedPlayers >= 2 and numericStartTimeRemaining > 0
 	local seeking = phase == "Seeking"
 	local timerVisible = not waiting and not seeking
 	local timerWarning = timerVisible and numericTimeRemaining <= 5 and numericTimeRemaining > 0
@@ -235,15 +250,45 @@ local function RoundApp()
 		end
 	end, { numericTimeRemaining, timerWarning })
 
-	local phaseText = if waiting then "WAITING TO START" elseif seeking then "SEEKING" else "HIDING"
+	local phaseText = if starting
+		then "ROUND STARTING"
+		elseif waiting
+		then "WAITING FOR PLAYERS"
+		elseif seeking
+		then if role == "Seeker"
+			then "FIND THEM!"
+			elseif role == "Hider"
+			then "STAY OUT OF SIGHT OF THE SEEKER"
+			else "SEEKING"
+		else if role == "Seeker"
+		then "WAIT FOR PLAYERS TO HIDE"
+		elseif role == "Hider"
+		then "GO HIDE!"
+		else "HIDING"
 	local phaseColor = if waiting then WAITING_COLOR elseif seeking then SEEKING_COLOR else HIDING_COLOR
+	local waitingStatusText = if starting
+		then `Starting in {math.max(0, math.floor(numericStartTimeRemaining))}...`
+		else "Need at least 2 players"
+	local roleText = if role == "Seeker"
+		then "You are the seeker"
+		elseif role == "Hider"
+		then "You are hiding"
+		elseif role == "Spectator"
+		then "You are spectating"
+		else ""
+	local roleColor = if role == "Seeker"
+		then SEEKING_COLOR
+		elseif role == "Hider"
+		then HIDING_COLOR
+		else Color3.fromRGB(210, 216, 225)
+	local hasRole = roleText ~= ""
 
 	return e(React.Fragment, nil, {
 		PhaseLabel = e("TextLabel", {
 			AnchorPoint = Vector2.new(0.5, 0),
 			BackgroundTransparency = 1,
 			FontFace = GOTHAM_BOLD,
-			Position = UDim2.new(0.5, 0, 0, 18),
+			Position = if hasRole then UDim2.new(0.5, 0, 0, 58) else UDim2.new(0.5, 0, 0, 18),
 			Size = UDim2.new(0.68, 0, 0, 42),
 			Text = phaseText,
 			TextColor3 = phaseColor,
@@ -263,7 +308,7 @@ local function RoundApp()
 			AnchorPoint = Vector2.new(0.5, 0),
 			BackgroundTransparency = 1,
 			FontFace = GOTHAM_HEAVY,
-			Position = UDim2.new(0.5, 0, 0, 58),
+			Position = if hasRole then UDim2.new(0.5, 0, 0, 104) else UDim2.new(0.5, 0, 0, 58),
 			Size = UDim2.fromOffset(190, 100),
 			Text = tostring(math.max(0, math.floor(numericTimeRemaining))),
 			TextColor3 = if timerWarning then WARNING_TIMER_COLOR else NORMAL_TIMER_COLOR,
@@ -286,13 +331,39 @@ local function RoundApp()
 			FontFace = GOTHAM_MEDIUM,
 			Position = UDim2.new(0.5, 0, 0, 66),
 			Size = UDim2.new(0.6, 0, 0, 30),
-			Text = "Approach SeekerSpot to begin",
+			Text = waitingStatusText,
 			TextColor3 = Color3.fromRGB(235, 239, 246),
 			TextSize = 18,
 			TextStrokeColor3 = Color3.fromRGB(8, 12, 20),
 			TextStrokeTransparency = 0.55,
 			Visible = waiting,
 			ZIndex = 2,
+		}),
+
+		RoleLabel = e("TextLabel", {
+			AnchorPoint = Vector2.new(0.5, 0),
+			BackgroundColor3 = Color3.fromRGB(15, 22, 34),
+			BackgroundTransparency = 0.2,
+			BorderSizePixel = 0,
+			FontFace = GOTHAM_BOLD,
+			Position = UDim2.new(0.5, 0, 0, 14),
+			Size = UDim2.fromOffset(220, 38),
+			Text = roleText,
+			TextColor3 = roleColor,
+			TextSize = 20,
+			TextStrokeColor3 = Color3.fromRGB(8, 12, 20),
+			TextStrokeTransparency = 0.55,
+			Visible = hasRole,
+			ZIndex = 2,
+		}, {
+			UICorner = e("UICorner", {
+				CornerRadius = UDim.new(0, 9),
+			}),
+			UIStroke = e("UIStroke", {
+				Color = roleColor,
+				Thickness = 1.5,
+				Transparency = 0.25,
+			}),
 		}),
 
 		ResetButton = e("TextButton", {

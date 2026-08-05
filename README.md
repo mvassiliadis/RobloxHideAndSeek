@@ -2,7 +2,7 @@
 
 Development handoff and current-state reference for the Roblox experience. This file is intended to give a new chat enough context to continue development safely without reconstructing the project from conversation history.
 
-Last live audit: **2026-08-04** using the connected Roblox Studio MCP, with Studio in Edit mode.
+Last live audit: **2026-08-05** using the connected Roblox Studio MCP, with the Match place confirmed in Edit mode.
 
 ## Important: source ownership
 
@@ -76,17 +76,21 @@ WaitingToStart -> Hiding -> Seeking
 
 - This is the first phase of every initial or reset round.
 - The timer is hidden.
-- The HUD displays **WAITING TO START** and `Approach SeekerSpot to begin`.
-- Hiding starts when any player's character touches `SeekerSpot` or their `HumanoidRootPart` comes within the configured activation distance.
-- Proximity is measured from the closest point on the oriented `SeekerSpot` bounding box, not only from its center.
-- The server checks proximity every `0.15` seconds.
+- With fewer than two connected players, the HUD displays **WAITING FOR PLAYERS** and `Need at least 2 players`.
+- With at least two connected players, the HUD displays **ROUND STARTING** and the replicated five-second startup countdown.
+- A player joining or leaving while waiting cancels and restarts the countdown so direct Studio test clients have time to connect.
+- No world interaction, Lobby data, teleport data, or `SeekerSpot` proximity is required.
+- When the countdown expires, the server shuffles the connected roster, selects exactly one seeker and up to four hiders, assigns unique role spawns, and starts Hiding.
+- If more than five players are connected, the remaining shuffled players become spectators at `WaitingSpawn`.
 
 ### 2. Hiding
 
 - Default duration: **30 seconds**.
 - A large synchronized countdown appears at the top center of the screen.
 - The last five seconds turn red and pulse.
-- When the countdown finishes, the server changes the phase to `Seeking`.
+- The seeker waits at `SeekerHoldingSpawn`; hiders occupy unique, shuffled markers beneath `HiderSpawns`; spectators remain at `WaitingSpawn`.
+- While Hiding, the server anchors the seeker's `HumanoidRootPart` at the holding marker so temporary or open holding areas cannot be escaped. The root is unanchored before release, on reset, and when assignments are cleared.
+- When the countdown finishes, the server moves the seeker to `SeekerReleaseSpawn` and changes the phase to `Seeking`.
 
 ### 3. Seeking
 
@@ -94,13 +98,16 @@ WaitingToStart -> Hiding -> Seeking
 - The countdown is hidden.
 - This phase currently lasts indefinitely.
 - The only way to leave Seeking is to reset the round.
+- Late joiners become spectators and are kept at `WaitingSpawn` rather than joining the active round.
 
 ### Reset behavior
 
 - Any player can reset because all current users are treated as playtesters.
 - Resets are sent to the server through `ResetRequested` and are debounced for one second.
-- Reset increments `RoundNumber`, cancels an active countdown, clears the timer, and returns to `WaitingToStart`.
-- If a player is still standing inside the SeekerSpot trigger area after a reset, the proximity check may immediately start Hiding again. Move players away first if a persistent waiting state is desired.
+- Reset increments `RoundNumber` and the controller generation, cancelling either startup or Hiding countdown work.
+- It clears server role/spawn assignments and every player's replicated `Role` attribute, resets both timers, returns remaining characters to `WaitingSpawn`, and enters `WaitingToStart`.
+- If at least two players remain, reset automatically schedules a completely new random role selection after the normal startup delay.
+- If the active seeker leaves, or the last active hider leaves, the server performs the same reset. One hider leaving while another remains does not end the round; spectators leaving have no round effect.
 
 ## Player controls
 
@@ -139,14 +146,17 @@ Select `ReplicatedStorage.RoundState` in Studio and edit its attributes:
 | --- | ---: | --- |
 | `Phase` | `WaitingToStart` | Replicated current phase. Runtime-owned by the server. |
 | `TimeRemaining` | `0` | Replicated Hiding countdown. Runtime-owned by the server. |
+| `StartTimeRemaining` | `0` | Replicated automatic-start countdown. Runtime-owned by the server. |
+| `ConnectedPlayers` | `0` | Replicated connected-player count for waiting HUD feedback. Runtime-owned by the server. |
 | `RoundNumber` | `0` in Edit mode | Incremented whenever a round is initialized or reset. |
 | `HidingDuration` | `30` | Hiding duration in seconds. Minimum effective value is 1. |
-| `ActivationDistance` | `4` | Extra trigger distance in studs outside SeekerSpot's bounds. Minimum is 0. |
 
 Other constants currently live in scripts:
 
+- Minimum players: `2` in `RoundController`.
+- Maximum hiders: `4`; maximum active round players: `5` in `RoundController`.
+- Automatic-start delay: `5` seconds in `RoundController`.
 - Server reset debounce: `1` second in `RoundController`.
-- Proximity polling interval: `0.15` seconds in `RoundController`.
 - Desktop `R` hold duration: `1` second in `RoundApp`.
 
 ## Studio hierarchy and ownership
@@ -155,8 +165,8 @@ Other constants currently live in scripts:
 ReplicatedStorage
 ├── Packages (Wally-managed React dependencies)
 └── RoundState (Folder)
-    ├── attributes: Phase, TimeRemaining, RoundNumber,
-    │              HidingDuration, ActivationDistance
+    ├── attributes: Phase, TimeRemaining, StartTimeRemaining,
+    │              ConnectedPlayers, RoundNumber, HidingDuration
     └── ResetRequested (RemoteEvent)
 
 ServerScriptService
@@ -178,12 +188,18 @@ Workspace
 ├── SpawnLocation
 ├── Baseplate
 ├── Camera
-└── Obstacles
-    ├── SeekerSpot
-    ├── SeekerSpotTriggerDecal
-    │   └── TriggerAreaDecal (SurfaceGui)
-    │       └── AreaDisc (Frame with UICorner and UIStroke)
-    └── many prototype obstacle Parts
+├── Obstacles
+│   ├── SeekerSpot (retained map object; no startup behavior)
+│   └── many prototype obstacle Parts
+└── RoundSpawns (Folder or Model)
+    ├── WaitingSpawn (BasePart)
+    ├── SeekerHoldingSpawn (BasePart)
+    ├── SeekerReleaseSpawn (BasePart)
+    └── HiderSpawns (Folder or Model)
+        ├── Hider1 (BasePart)
+        ├── Hider2 (BasePart)
+        ├── Hider3 (BasePart)
+        └── Hider4 (BasePart)
 ```
 
 ### `ServerScriptService.RoundController`
@@ -191,52 +207,53 @@ Workspace
 Responsibilities:
 
 - Own all authoritative phase transitions.
-- Locate a descendant of Workspace named exactly `SeekerSpot` and assert that it is a `BasePart`.
-- Detect both physical touches and nearby player roots.
-- Run and cancel the Hiding countdown using a generation token.
+- Validate the Studio-owned `RoundSpawns` hierarchy and normalize markers to anchored, invisible, non-collidable, non-touchable, non-queryable parts.
+- Run and cancel automatic-start and Hiding countdowns using one generation token.
+- Shuffle the roster with one server-created `Random`, assign one seeker, up to four hiders, and any overflow spectators, and replicate each role through the player's `Role` attribute.
+- Keep authoritative role and hider-spawn assignments on the server, including unique shuffled hider markers.
+- Reposition characters on assignment and respawn using each marker's full `CFrame` plus a small vertical offset.
+- Reset when the seeker or final hider leaves, while allowing rounds to continue after spectator departures or a non-final hider departure.
 - Replicate state through `RoundState` attributes.
 - Accept playtester reset requests with server-side debounce.
-- Resize and reposition the ground trigger marker from the SeekerSpot bounds and `ActivationDistance`.
 
-The server script will intentionally fail its startup assertion if `SeekerSpot` is removed, renamed, or changed to a non-BasePart object.
+The server script intentionally fails startup validation when required spawn containers/markers are absent or when fewer than four BasePart hider markers exist. It does not inspect or reference `SeekerSpot`.
 
 ### `StarterGui.RoundGui.RoundApp`
 
 Responsibilities:
 
 - Render all three phase states from replicated attributes.
-- Show/hide the timer and waiting instruction.
+- Show/hide the Hiding timer and distinguish waiting-for-players from automatic-start countdown state.
+- Display the local player's replicated assignment as `You are the seeker`, `You are hiding`, or `You are spectating` throughout the active round.
+- Show role-specific phase prompts: seekers see `WAIT FOR PLAYERS TO HIDE` then `FIND THEM!`; hiders see `GO HIDE!` then `STAY OUT OF SIGHT OF THE SEEKER`.
 - Pulse the final five countdown values.
 - Send reset requests from the reset button or held `R` key.
 - Manage Alt-based desktop cursor interaction.
 - Display the discreet bottom-left controls guide on keyboard devices.
 - Apply the macOS first-person cursor startup/respawn refresh.
 
-Clients do not decide phase transitions or directly reset server state.
+Clients do not choose or submit roles, decide phase transitions, or directly mutate server state.
 
-## SeekerSpot and trigger marker
+## Round spawn markers
 
-Current SeekerSpot details:
+The connected Match place now contains the required marker hierarchy. The markers created during the 2026-08-05 implementation pass use safe, non-overlapping **temporary** positions:
 
-| Property | Value |
+| Marker | Temporary position `(X, Y, Z)` |
 | --- | --- |
-| Path | `Workspace.Obstacles.SeekerSpot` |
-| Class | `Part` |
-| Shape/color | Bright-red vertical cylinder |
-| Position | Approximately `(0.5, 5, -27.547)` |
-| Size | `(10, 7, 9)` |
-| Anchored | `true` |
-| CanCollide / CanTouch / CanQuery | `true / true / true` |
+| `WaitingSpawn` | `(0, 1, 0)` |
+| `SeekerHoldingSpawn` | `(0, 1, -15)` |
+| `SeekerReleaseSpawn` | `(0, 1, 15)` |
+| `Hider1` | `(-30, 1, 40)` |
+| `Hider2` | `(-10, 1, 40)` |
+| `Hider3` | `(10, 1, 40)` |
+| `Hider4` | `(30, 1, 40)` |
 
-The visible start boundary is an asset-free, decal-style ground marker:
-
-- Path: `Workspace.Obstacles.SeekerSpotTriggerDecal`.
-- Current size: `17 x 0.05 x 17` studs for the current SeekerSpot and four-stud activation distance.
-- Invisible, anchored support part with `CanCollide`, `CanTouch`, and `CanQuery` disabled.
-- A top-facing `SurfaceGui` draws a translucent amber disc and bright circular perimeter.
-- The marker has no external image/asset dependency.
-- `RoundController` recalculates it at server startup and whenever `ActivationDistance` changes.
-- Moving or resizing SeekerSpot in Edit mode may leave the Edit-mode marker temporarily stale; starting Play causes the server to realign it.
+- A map designer must deliberately reposition and orient all seven markers for the final waiting area, seeker enclosure/release point, and hiding map.
+- Marker `CFrame` orientation controls the direction a respawned character faces.
+- Every marker is currently a `4 x 1 x 4` anchored Part with transparency `1` and collision, touch, and query disabled.
+- `Workspace.Obstacles.SeekerSpotTriggerDecal` was removed from the connected Match place because it served only the obsolete activation boundary.
+- `Workspace.Obstacles.SeekerSpot` was retained as a visible map object because inspection did not prove it had no remaining map purpose. The controller no longer references it.
+- Studio-owned changes must be saved or published from Studio; Rojo builds do not contain these map markers.
 
 ## World and visual state
 
@@ -253,35 +270,35 @@ As of the last audit:
 
 Because the developer is modifying the map directly in Studio, refresh the hierarchy before making assumptions about obstacle counts or positions.
 
-## Verified behavior
+## Validation and direct Studio testing
 
-The following was tested through Roblox Studio Play mode:
+Filesystem validation for this implementation includes both `rojo sourcemap match.project.json` and `rojo build match.project.json`. Because the spawn hierarchy is Studio-owned, normal testing must use Rojo live sync against the existing Match place rather than treating the filesystem-only build as a complete map.
 
-- Player spawns successfully in locked first person.
-- Waiting remains active while the player is away from SeekerSpot.
-- Moving a player within the activation area changes Waiting to Hiding.
-- The Hiding countdown replicates to the HUD.
-- A temporary runtime-only three-second duration transitioned correctly to Seeking.
-- Reset returned the game to Waiting when the player was moved away from SeekerSpot.
-- The reset button was activated in a prior UI test and reached the server.
-- Saved `HidingDuration` remained 30 after temporary runtime tests.
-- The trigger marker rendered correctly during Play mode and matched the configured area.
-- No game-script runtime errors were present in the latest checks.
+A one-client Play check on 2026-08-05 confirmed that the updated controller and HUD load without console errors, remain in `WaitingToStart`, keep `Role` clear, place the character at `WaitingSpawn`, replicate `ConnectedPlayers = 1`, and display **WAITING FOR PLAYERS** / `Need at least 2 players`. The available Studio bridge does not launch multi-client Server & Clients sessions, so the following multiplayer matrix remains a manual Studio check.
 
-Temporary Play-mode test values do not persist back into Edit mode.
+Use Studio's **Server & Clients** test mode with two through five clients. The five-second startup delay is specifically intended to absorb asynchronous test-client connections. Verify:
+
+- One client remains in `WaitingToStart` indefinitely and every waiting character uses `WaitingSpawn`.
+- Two through five clients produce exactly one `Seeker`, between one and four `Hider` attributes, no spectators, and unique hider marker assignments.
+- A waiting roster change restarts the startup countdown; dropping below two cancels it.
+- The seeker begins at `SeekerHoldingSpawn` and moves to `SeekerReleaseSpawn` before Seeking begins.
+- A reset clears role attributes, moves everyone to `WaitingSpawn`, and automatically schedules a fresh random selection when at least two players remain.
+- Respawning returns a participant to the spawn appropriate for their current role and phase.
+- A seeker departure or final-hider departure resets; one hider leaving while another remains continues; spectator departure does not affect the round.
+- Late joiners during Hiding or Seeking receive `Spectator` and stay at `WaitingSpawn`.
+- No transition depends on touching, approaching, or retaining `SeekerSpot`.
+
+For overflow testing above five players, verify that only five shuffled players are active and all remaining players are spectators. This exceeds the requested two-to-five-client baseline.
 
 ## Known missing gameplay
 
 The project has a round shell, not yet a complete hide-and-seek game. The following systems do not currently exist:
 
-- Seeker selection or role assignment.
-- Hider/seeker teams.
-- Freezing, teleporting, hiding, or revealing players by phase.
 - Tag/catch mechanics.
-- Hider elimination or spectator mode.
+- Hider elimination and promotion to spectator after being caught.
 - Win conditions and automatic end-of-round behavior.
 - A timed Seeking phase.
-- Minimum-player checks or a lobby population requirement.
+- Dedicated spectator camera/UI behavior beyond the replicated role and waiting-area spawn.
 - Multiple maps or map rotation.
 - Scores, rewards, persistence, badges, or data stores.
 - Sound effects, music, or phase announcements.
@@ -289,15 +306,14 @@ The project has a round shell, not yet a complete hide-and-seek game. The follow
 
 ## Recommended next development steps
 
-1. Decide how the seeker is selected when a player activates SeekerSpot.
-2. Assign explicit seeker/hider roles on the server.
-3. Add phase-specific spawning or movement rules.
-4. Implement server-authoritative tagging and elimination.
-5. Add a Seeking duration and win conditions.
-6. Restrict reset access before inviting non-playtesters.
-7. Rename generic obstacle parts or group them into maintainable models.
-8. Add audio and clearer feedback for phase transitions.
-9. Gradually rename generic obstacle parts and export stable map sections into Rojo-owned `.rbxm`/`.rbxmx` models when they stop changing rapidly.
+1. Deliberately position and orient the temporary waiting, seeker, and hider markers in the final map layout.
+2. Run two-to-five-client Server & Clients tests after syncing the Match project.
+3. Implement server-authoritative tagging and elimination.
+4. Add a Seeking duration and win conditions.
+5. Restrict reset access before inviting non-playtesters.
+6. Rename generic obstacle parts or group them into maintainable models.
+7. Add audio and clearer feedback for phase transitions.
+8. Gradually rename generic obstacle parts and export stable map sections into Rojo-owned `.rbxm`/`.rbxmx` models when they stop changing rapidly.
 
 ## Workflow for a new chat
 

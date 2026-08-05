@@ -30,9 +30,10 @@
           "Attributes": {
             "Phase": { "String": "WaitingToStart" },
             "TimeRemaining": { "Float64": 0 },
+            "StartTimeRemaining": { "Float64": 0 },
+            "ConnectedPlayers": { "Float64": 0 },
             "RoundNumber": { "Float64": 0 },
-            "HidingDuration": { "Float64": 30 },
-            "ActivationDistance": { "Float64": 4 }
+            "HidingDuration": { "Float64": 30 }
           }
         },
         "ResetRequested": {
