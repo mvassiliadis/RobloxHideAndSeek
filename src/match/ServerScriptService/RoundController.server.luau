@@ -35,7 +35,7 @@ local TAG_HITBOX_SIZE = Vector3.new(3.8, 6.4, 2.4)
 local TAG_HITBOX_VERTICAL_OFFSET = 0.2
 local POST_CAPTURE_RADIUS = 8
 local POST_AWAY_RADIUS = 12
-local ROUND_COMPLETE_DELAY = 2
+local ROUND_COMPLETE_DELAY = 7
 local POST_INDICATOR_SEGMENT_COUNT = 24
 local POST_GROUND_SAMPLE_COUNT = 8
 local POST_GROUND_SAMPLE_RADIUS = POST_CAPTURE_RADIUS
@@ -743,8 +743,8 @@ local function positionCharacterWhenReady(player: Player, character: Model)
 	end
 end
 
-local scheduleAutomaticStart: (excludedPlayer: Player?) -> ()
-local resetRound: (excludedPlayer: Player?) -> ()
+local scheduleAutomaticStart: (excludedPlayer: Player?, startImmediately: boolean?) -> ()
+local resetRound: (excludedPlayer: Player?, startImmediately: boolean?) -> ()
 
 local function runHidingPhase(thisGeneration: number)
 	for timeRemaining = getHidingDuration(), 1, -1 do
@@ -848,7 +848,7 @@ local function beginRoleSelection(thisGeneration: number)
 	end)
 end
 
-scheduleAutomaticStart = function(excludedPlayer: Player?)
+scheduleAutomaticStart = function(excludedPlayer: Player?, startImmediately: boolean?)
 	if roundState:GetAttribute("Phase") ~= WAITING_PHASE then
 		updateConnectedPlayers(excludedPlayer)
 		return
@@ -862,6 +862,11 @@ scheduleAutomaticStart = function(excludedPlayer: Player?)
 
 	if not canStartRound(connectedPlayers) then
 		roundState:SetAttribute("StartTimeRemaining", 0)
+		return
+	end
+	if startImmediately then
+		roundState:SetAttribute("StartTimeRemaining", 0)
+		beginRoleSelection(thisGeneration)
 		return
 	end
 
@@ -884,7 +889,7 @@ scheduleAutomaticStart = function(excludedPlayer: Player?)
 	end)
 end
 
-resetRound = function(excludedPlayer: Player?)
+resetRound = function(excludedPlayer: Player?, startImmediately: boolean?)
 	generation += 1
 
 	local currentRound = roundState:GetAttribute("RoundNumber")
@@ -905,10 +910,10 @@ resetRound = function(excludedPlayer: Player?)
 
 	if excludedPlayer then
 		task.defer(function()
-			scheduleAutomaticStart(nil)
+			scheduleAutomaticStart(nil, startImmediately)
 		end)
 	else
-		scheduleAutomaticStart(nil)
+		scheduleAutomaticStart(nil, startImmediately)
 	end
 end
 
@@ -1030,7 +1035,7 @@ local function scheduleRoundResetIfComplete()
 			and roundState:GetAttribute("Phase") == SEEKING_PHASE
 			and getRemainingHiderCount() == 0
 		then
-			resetRound(nil)
+			resetRound(nil, true)
 		end
 	end)
 end

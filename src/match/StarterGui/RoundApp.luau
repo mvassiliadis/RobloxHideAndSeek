@@ -480,6 +480,7 @@ local function RoundApp()
 	local eliminatedHiders: { HiderRosterItem } = {}
 	local localPlayerIsTagged = false
 	local localPlayerIsWinner = false
+	local localPlayerIsEliminated = false
 	for _, hider in hiderRoster do
 		if hider.status == "Active" then
 			table.insert(activeHiders, hider)
@@ -495,6 +496,9 @@ local function RoundApp()
 			end
 		else
 			table.insert(eliminatedHiders, hider)
+			if hider.userId == localPlayer.UserId then
+				localPlayerIsEliminated = true
+			end
 		end
 	end
 	local selectionCandidates = parseUserIds(selectionUserIds)
@@ -513,6 +517,21 @@ local function RoundApp()
 	local hasPendingTags = taggedHiderCount > 0
 	local taggedHiderNoun = if taggedHiderCount == 1 then "HIDER" else "HIDERS"
 	local roundHidersResolved = #hiderRoster > 0 and #activeHiders == 0 and taggedHiderCount == 0
+	local roundResultText = ""
+	local roundResultWon = false
+	if seeking and roundHidersResolved then
+		if localPlayerIsWinner then
+			roundResultText = "YOU WON"
+			roundResultWon = true
+		elseif localPlayerIsEliminated then
+			roundResultText = "YOU LOST"
+		elseif role == "Seeker" then
+			roundResultWon = #winnerHiders == 0
+			roundResultText = if roundResultWon then "YOU WON" else "YOU LOST"
+		end
+	end
+	local roundResultVisible = roundResultText ~= ""
+	local roundResultColor = if roundResultWon then WINNER_HIDER_COLOR else TAGGED_ALERT_COLOR
 
 	React.useEffect(function()
 		if not selecting or #selectionCandidates == 0 then
@@ -994,6 +1013,40 @@ local function RoundApp()
 				Position = UDim2.fromScale(1, 0),
 				Size = UDim2.new(0, 12, 1, 0),
 				ZIndex = 10,
+			}),
+		}),
+
+		RoundResult = e("TextLabel", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			BackgroundColor3 = Color3.fromRGB(10, 16, 25),
+			BackgroundTransparency = 0.14,
+			BorderSizePixel = 0,
+			FontFace = GOTHAM_HEAVY,
+			Position = UDim2.fromScale(0.5, 0.48),
+			Size = UDim2.new(0.72, 0, 0, 150),
+			Text = roundResultText,
+			TextColor3 = roundResultColor,
+			TextScaled = true,
+			TextStrokeColor3 = Color3.fromRGB(5, 8, 13),
+			TextStrokeTransparency = 0.12,
+			Visible = roundResultVisible,
+			ZIndex = 20,
+		}, {
+			Corner = e("UICorner", {
+				CornerRadius = UDim.new(0, 22),
+			}),
+			SizeConstraint = e("UISizeConstraint", {
+				MaxSize = Vector2.new(720, 150),
+				MinSize = Vector2.new(280, 110),
+			}),
+			Stroke = e("UIStroke", {
+				Color = roundResultColor,
+				Thickness = 4,
+				Transparency = 0.08,
+			}),
+			TextConstraint = e("UITextSizeConstraint", {
+				MaxTextSize = 92,
+				MinTextSize = 44,
 			}),
 		}),
 

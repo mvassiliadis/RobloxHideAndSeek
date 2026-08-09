@@ -77,10 +77,10 @@ WaitingToStart -> SelectingRoles -> Hiding -> Seeking
 
 ### 1. WaitingToStart
 
-- This is the first phase of every initial or reset round.
+- This is the first phase of the initial round and of manual or departure-triggered resets. A normally completed round skips its startup countdown after the seven-second result display and proceeds directly to `SelectingRoles`.
 - The timer is hidden.
 - With fewer than two connected players, the HUD displays **WAITING FOR PLAYERS** and `Need at least 2 players`, except when Studio solo practice is enabled.
-- With at least two connected players, the HUD displays **ROUND STARTING** and the replicated five-second startup countdown.
+- With at least two connected players, the initial round displays **ROUND STARTING** and the replicated five-second startup countdown.
 - A player joining or leaving while waiting cancels and restarts the countdown so direct Studio test clients have time to connect.
 - No world interaction, Lobby data, teleport data, or `SeekerSpot` proximity is required.
 - When the countdown expires, the server shuffles and locks the connected roster, selects exactly one seeker and up to four hiders, and begins the synchronized role-selection reveal.
@@ -117,7 +117,7 @@ WaitingToStart -> SelectingRoles -> Hiding -> Seeking
 - During Seeking, the server raycasts around the post perimeter to generate a ground-flush, non-colliding red capture-area disc and segmented boundary. The indicator follows `SeekerHoldingSpawn` if the marker moves and is never baked into the Studio-authored map.
 - Winning and eliminated real hiders become spectators and move to their waiting-area slots; eliminated practice mannequins are removed. Stationary practice mannequins cannot race to the post or become winners.
 - A right-side **HIDER ROSTER** groups every round hider under **ACTIVE**, **TAGGED**, **WINNERS**, or **ELIMINATED**, with player avatars, names, counts, and practice-bot fallbacks.
-- Resolving the final hider as a winner or elimination displays the completed roster for two seconds, then automatically resets the round and starts a new round when enough players remain.
+- Resolving the final hider as a winner or elimination displays the completed roster and result banner for seven seconds, then automatically resets and proceeds directly to role selection when enough players remain.
 - The HUD tells every hider that reaching the post wins, gives tagged hiders the urgent race warning, and shows the seeker how many pending tags will be banked together.
 - A tagged real hider gets a bright red border around the entire screen and the warning `YOU'VE BEEN TAGGED. RUN TO THE POST BEFORE THE SEEKER TO WIN` until their tag status changes.
 - When Seeking begins, mouse camera movement is restored immediately while the black camera layer fades away.
@@ -296,6 +296,7 @@ Responsibilities:
 - Render the right-side hider roster with separate Active, Tagged, Winners, and Eliminated sections.
 - Render an unmistakable full-screen red perimeter and expanded warning prompt for the locally tagged hider.
 - Show a winning hider a green role banner and a clear round-win message while their name remains in the Winners section.
+- Show a large green **YOU WON** or red **YOU LOST** banner to participating seekers and hiders during the end-of-round completion display. The seeker wins only when no hider reached the post.
 - Render the synchronized avatar roulette during `SelectingRoles`, with a server-clock-driven ease-out that lands on the authoritative seeker.
 - Pulse the final five countdown values.
 - Send reset requests from the reset button or held `R` key.
@@ -372,7 +373,7 @@ Then use Studio's **Server & Clients** test mode with two through five clients. 
 - If a seeker and tagged hider enter during the same server frame, the seeker wins the tie and the hider is eliminated.
 - The runtime post indicator appears only during Seeking, sits flush on the sampled ground, matches the horizontal 8-stud capture radius, and follows the marker after a `CFrame` change.
 - One return promotes every tagged real hider to spectator and removes every tagged practice hider.
-- All four roster sections and counts update together, and resolving the final hider resets after the two-second completion display.
+- All four roster sections and counts update together, resolving the final hider shows each participant a large green **YOU WON** or red **YOU LOST** result for seven seconds, and the next round proceeds directly to role selection without another **ROUND STARTING** countdown.
 - Late joiners during Hiding or Seeking receive `Spectator` and stay in separate slots around `WaitingSpawn`.
 - No transition depends on touching, approaching, or retaining `SeekerSpot`.
 
