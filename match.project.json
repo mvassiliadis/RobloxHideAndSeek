@@ -37,6 +37,7 @@
             "SelectionUserIds": { "String": "" },
             "SelectedSeekerUserId": { "Float64": 0 },
             "HiderRosterJson": { "String": "[]" },
+            "TagAssistRadius": { "Float64": 1.5 },
             "StudioPracticeEnabled": { "Bool": true },
             "StudioPracticeHiderCount": { "Float64": 2 },
             "StudioPracticeHidingDuration": { "Float64": 3 },

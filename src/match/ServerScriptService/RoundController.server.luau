@@ -27,6 +27,12 @@ local WAITING_SPAWN_SPACING = 6
 local MAX_TAG_DISTANCE = 300
 local MAX_CAMERA_ORIGIN_OFFSET = 8
 local TAG_REQUEST_COOLDOWN = 0.15
+local DEFAULT_TAG_ASSIST_RADIUS = 1.5
+local MAX_TAG_ASSIST_RADIUS = 4
+local TAG_ASSIST_LINE_OF_SIGHT_EPSILON = 0.25
+local TAG_HITBOX_NAME = "RuntimeTagHitbox"
+local TAG_HITBOX_SIZE = Vector3.new(3.8, 6.4, 2.4)
+local TAG_HITBOX_VERTICAL_OFFSET = 0.2
 local POST_CAPTURE_RADIUS = 8
 local POST_AWAY_RADIUS = 12
 local ROUND_COMPLETE_DELAY = 2
@@ -435,6 +441,61 @@ local function setHiderStatus(target: TagTarget, status: HiderStatus)
 	end
 end
 
+local function createTagHitbox(parent: Instance, cframe: CFrame, anchored: boolean): Part
+	local hitbox = Instance.new("Part")
+	hitbox.Name = TAG_HITBOX_NAME
+	hitbox:SetAttribute("RuntimeGenerated", true)
+	hitbox.Anchored = anchored
+	hitbox.CanCollide = false
+	hitbox.CanQuery = true
+	hitbox.CanTouch = false
+	hitbox.CastShadow = false
+	hitbox.Massless = true
+	hitbox.Size = TAG_HITBOX_SIZE
+	hitbox.CFrame = cframe
+	hitbox.Transparency = 1
+	hitbox.Parent = parent
+
+	return hitbox
+end
+
+local function updatePlayerTagHitbox(player: Player, character: Model)
+	local activeHitbox: BasePart? = nil
+	for _, child in character:GetChildren() do
+		if child:IsA("BasePart")
+			and child.Name == TAG_HITBOX_NAME
+			and child:GetAttribute("RuntimeGenerated") == true
+		then
+			if roleAssignments[player] == HIDER_ROLE and not activeHitbox then
+				activeHitbox = child
+				child.Size = TAG_HITBOX_SIZE
+			else
+				child:Destroy()
+			end
+		end
+	end
+
+	if roleAssignments[player] ~= HIDER_ROLE or activeHitbox then
+		return
+	end
+
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if not rootPart or not rootPart:IsA("BasePart") then
+		return
+	end
+
+	local hitbox = createTagHitbox(
+		character,
+		rootPart.CFrame * CFrame.new(0, TAG_HITBOX_VERTICAL_OFFSET, 0),
+		false
+	)
+	local weld = Instance.new("WeldConstraint")
+	weld.Name = "TagHitboxWeld"
+	weld.Part0 = rootPart
+	weld.Part1 = hitbox
+	weld.Parent = hitbox
+end
+
 local function createPracticeBodyPart(
 	model: Model,
 	name: string,
@@ -524,6 +585,7 @@ local function createPracticeHider(index: number, marker: BasePart, parent: Fold
 		baseCFrame * CFrame.new(0, 5.05, 0),
 		Enum.PartType.Ball
 	)
+	createTagHitbox(model, baseCFrame * CFrame.new(0, 3.2, 0), true)
 	model.PrimaryPart = torso
 
 	local nameplate = Instance.new("BillboardGui")
@@ -690,6 +752,7 @@ local function movePlayerToAssignedSpawn(player: Player)
 	local character = player.Character
 	if character and character.Parent then
 		pivotCharacterToAssignedSpawn(player, character)
+		updatePlayerTagHitbox(player, character)
 		setCharacterLocked(character, shouldLockPlayer(player))
 	end
 end
@@ -707,6 +770,7 @@ local function positionCharacterWhenReady(player: Player, character: Model)
 	end
 
 	pivotCharacterToAssignedSpawn(player, character)
+	updatePlayerTagHitbox(player, character)
 	setCharacterLocked(character, shouldLockPlayer(player))
 
 	if player == seekerPlayer and #taggedHiderTargets > 0 then
@@ -1040,6 +1104,61 @@ local function isFiniteVector3(value: Vector3): boolean
 		and math.abs(value.Z) < math.huge
 end
 
+local function getTagAssistRadius(): number
+	local configuredRadius = roundState:GetAttribute("TagAssistRadius")
+	if typeof(configuredRadius) ~= "number" then
+		return DEFAULT_TAG_ASSIST_RADIUS
+	end
+
+	return math.clamp(configuredRadius, 0, MAX_TAG_ASSIST_RADIUS)
+end
+
+local function getTagTargetFromAim(
+	origin: Vector3,
+	unitDirection: Vector3,
+	raycastParameters: RaycastParams
+): TagTarget?
+	local castDirection = unitDirection * MAX_TAG_DISTANCE
+	local directResult = Workspace:Raycast(origin, castDirection, raycastParameters)
+	if directResult then
+		local directTarget = getTagTargetFromDescendant(directResult.Instance)
+		if directTarget and isTagTargetValid(directTarget) then
+			return directTarget
+		end
+	end
+
+	local assistRadius = getTagAssistRadius()
+	if assistRadius <= 0 then
+		return nil
+	end
+
+	local assistedResult = Workspace:Spherecast(origin, assistRadius, castDirection, raycastParameters)
+	if not assistedResult then
+		return nil
+	end
+
+	local assistedTarget = getTagTargetFromDescendant(assistedResult.Instance)
+	if not assistedTarget or not isTagTargetValid(assistedTarget) then
+		return nil
+	end
+
+	-- The spherecast supplies forgiving acquisition only. A thin ray to its
+	-- contact point still has to reach the same hider, preventing corner tags.
+	local lineOfSightDirection = assistedResult.Position - origin
+	if lineOfSightDirection.Magnitude <= 0.001 then
+		return nil
+	end
+
+	local lineOfSightCast = lineOfSightDirection.Unit
+		* (lineOfSightDirection.Magnitude + TAG_ASSIST_LINE_OF_SIGHT_EPSILON)
+	local lineOfSightResult = Workspace:Raycast(origin, lineOfSightCast, raycastParameters)
+	if not lineOfSightResult or getTagTargetFromDescendant(lineOfSightResult.Instance) ~= assistedTarget then
+		return nil
+	end
+
+	return assistedTarget
+end
+
 local function handleTagRequest(player: Player, cameraOrigin: unknown, cameraDirection: unknown)
 	local now = os.clock()
 	local lastRequestAt = lastTagRequestAt[player] or 0
@@ -1084,12 +1203,7 @@ local function handleTagRequest(player: Player, cameraOrigin: unknown, cameraDir
 	raycastParameters.FilterDescendantsInstances = { character }
 	raycastParameters.IgnoreWater = false
 
-	local raycastResult = Workspace:Raycast(origin, direction.Unit * MAX_TAG_DISTANCE, raycastParameters)
-	if not raycastResult then
-		return
-	end
-
-	local target = getTagTargetFromDescendant(raycastResult.Instance)
+	local target = getTagTargetFromAim(origin, direction.Unit, raycastParameters)
 	if not target or not isTagTargetValid(target) or taggedHiderSet[target] then
 		return
 	end

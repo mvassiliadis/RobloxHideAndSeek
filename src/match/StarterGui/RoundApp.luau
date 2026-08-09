@@ -32,6 +32,7 @@ local SELECTION_DIM_COLOR = Color3.fromRGB(82, 91, 110)
 local ACTIVE_HIDER_COLOR = Color3.fromRGB(92, 190, 255)
 local TAGGED_HIDER_COLOR = Color3.fromRGB(255, 178, 75)
 local ELIMINATED_HIDER_COLOR = Color3.fromRGB(143, 152, 168)
+local TAGGED_ALERT_COLOR = Color3.fromRGB(255, 45, 45)
 
 local DEFAULT_GUIDE_TEXT = "WASD  MOVE   •   MOUSE  LOOK\nHOLD ALT  CURSOR   •   HOLD R  RESET"
 local CURSOR_GUIDE_TEXT = "CURSOR ACTIVE\nRELEASE ALT TO LOOK"
@@ -447,6 +448,7 @@ local function RoundApp()
 		and roundState:GetAttribute("StudioPracticeEnabled") == true
 	local selecting = phase == "SelectingRoles"
 	local seeking = phase == "Seeking"
+	local taggedHiderAlertVisible = seeking and role == "Hider" and localPlayerIsTagged
 	local timerVisible = phase == "Hiding"
 	local timerWarning = timerVisible and numericTimeRemaining <= 5 and numericTimeRemaining > 0
 	local taggedHiderCount = #taggedHiders
@@ -582,7 +584,7 @@ local function RoundApp()
 				else "FIND A HIDER\nAIM AND CLICK TO TAG"
 			elseif role == "Hider"
 			then if localPlayerIsTagged
-				then "YOU HAVE BEEN TAGGED!\nTHE SEEKER IS RETURNING TO THE POST"
+				then "YOU'VE BEEN TAGGED.\nRUN TO THE POST BEFORE THE SEEKER TO WIN"
 				else "STAY OUT OF SIGHT OF THE SEEKER"
 			else "SEEKING"
 		else if role == "Seeker"
@@ -884,12 +886,54 @@ local function RoundApp()
 			ref = blackoutRef,
 		}),
 
+		TaggedScreenBorder = e("Frame", {
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Size = UDim2.fromScale(1, 1),
+			Visible = taggedHiderAlertVisible,
+			ZIndex = 10,
+		}, {
+			Top = e("Frame", {
+				BackgroundColor3 = TAGGED_ALERT_COLOR,
+				BorderSizePixel = 0,
+				Size = UDim2.new(1, 0, 0, 12),
+				ZIndex = 10,
+			}),
+			Bottom = e("Frame", {
+				AnchorPoint = Vector2.new(0, 1),
+				BackgroundColor3 = TAGGED_ALERT_COLOR,
+				BorderSizePixel = 0,
+				Position = UDim2.fromScale(0, 1),
+				Size = UDim2.new(1, 0, 0, 12),
+				ZIndex = 10,
+			}),
+			Left = e("Frame", {
+				BackgroundColor3 = TAGGED_ALERT_COLOR,
+				BorderSizePixel = 0,
+				Size = UDim2.new(0, 12, 1, 0),
+				ZIndex = 10,
+			}),
+			Right = e("Frame", {
+				AnchorPoint = Vector2.new(1, 0),
+				BackgroundColor3 = TAGGED_ALERT_COLOR,
+				BorderSizePixel = 0,
+				Position = UDim2.fromScale(1, 0),
+				Size = UDim2.new(0, 12, 1, 0),
+				ZIndex = 10,
+			}),
+		}),
+
 		PhaseLabel = e("TextLabel", {
 			AnchorPoint = Vector2.new(0.5, 0),
 			BackgroundTransparency = 1,
 			FontFace = GOTHAM_BOLD,
 			Position = if hasRole then UDim2.new(0.5, 0, 0, 58) else UDim2.new(0.5, 0, 0, 18),
-			Size = UDim2.new(0.68, 0, 0, if seeking and role ~= "Spectator" then 78 else 42),
+			Size = UDim2.new(
+				if taggedHiderAlertVisible then 0.82 else 0.68,
+				0,
+				0,
+				if taggedHiderAlertVisible then 100 elseif seeking and role ~= "Spectator" then 78 else 42
+			),
 			Text = phaseText,
 			TextColor3 = phaseColor,
 			TextScaled = true,
@@ -900,8 +944,8 @@ local function RoundApp()
 			ZIndex = 2,
 		}, {
 			UITextSizeConstraint = e("UITextSizeConstraint", {
-				MaxTextSize = 36,
-				MinTextSize = 20,
+				MaxTextSize = if taggedHiderAlertVisible then 30 else 36,
+				MinTextSize = if taggedHiderAlertVisible then 14 else 20,
 			}),
 		}),
 
@@ -915,35 +959,35 @@ local function RoundApp()
 		}, {
 			Top = e("Frame", {
 				AnchorPoint = Vector2.new(0.5, 1),
-				BackgroundColor3 = if hasPendingTags then SEEKING_COLOR else Color3.new(1, 1, 1),
+				BackgroundColor3 = Color3.new(1, 1, 1),
 				BorderSizePixel = 0,
 				Position = UDim2.new(0.5, 0, 0.5, -4),
 				Size = UDim2.fromOffset(2, 8),
 			}),
 			Bottom = e("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0),
-				BackgroundColor3 = if hasPendingTags then SEEKING_COLOR else Color3.new(1, 1, 1),
+				BackgroundColor3 = Color3.new(1, 1, 1),
 				BorderSizePixel = 0,
 				Position = UDim2.new(0.5, 0, 0.5, 4),
 				Size = UDim2.fromOffset(2, 8),
 			}),
 			Left = e("Frame", {
 				AnchorPoint = Vector2.new(1, 0.5),
-				BackgroundColor3 = if hasPendingTags then SEEKING_COLOR else Color3.new(1, 1, 1),
+				BackgroundColor3 = Color3.new(1, 1, 1),
 				BorderSizePixel = 0,
 				Position = UDim2.new(0.5, -4, 0.5, 0),
 				Size = UDim2.fromOffset(8, 2),
 			}),
 			Right = e("Frame", {
 				AnchorPoint = Vector2.new(0, 0.5),
-				BackgroundColor3 = if hasPendingTags then SEEKING_COLOR else Color3.new(1, 1, 1),
+				BackgroundColor3 = Color3.new(1, 1, 1),
 				BorderSizePixel = 0,
 				Position = UDim2.new(0.5, 4, 0.5, 0),
 				Size = UDim2.fromOffset(8, 2),
 			}),
 			Dot = e("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				BackgroundColor3 = if hasPendingTags then SEEKING_COLOR else Color3.new(1, 1, 1),
+				BackgroundColor3 = Color3.new(1, 1, 1),
 				BorderSizePixel = 0,
 				Position = UDim2.fromScale(0.5, 0.5),
 				Size = UDim2.fromOffset(4, 4),

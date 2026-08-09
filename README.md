@@ -109,7 +109,8 @@ WaitingToStart -> SelectingRoles -> Hiding -> Seeking
 ### 4. Seeking
 
 - The seeker gets a center-screen crosshair and can point at a visible hider and left-click to tag them.
-- The server raycasts the submitted first-person aim, enforces a 300-stud maximum range, and accepts only living hiders with unobstructed line of sight.
+- Every active hider receives a server-generated, invisible, non-colliding full-body tag volume, so limbs, gaps in an avatar rig, and cosmetic geometry do not reduce the reliable target silhouette. It is removed when the player stops being an active hider and is never baked into the map.
+- The server first raycasts the exact submitted aim against that volume, then uses a configurable 1.5-stud-radius spherecast only when the center ray misses. A final thin line-of-sight check, 300-stud maximum range, and living-hider validation keep the forgiving tag from reaching through walls or around corners.
 - The seeker can tag any number of currently active hiders before returning to the post. Tagged hiders remain active in the world until the tags are banked.
 - Returning to `SeekerHoldingSpawn` eliminates every currently tagged hider at once. Horizontal distance is measured against the post indicator: the seeker must have moved outside its 12-stud outer radius before entering its 8-stud capture radius, so respawning at the post cannot bank tags.
 - During Seeking, the server raycasts around the post perimeter to generate a ground-flush, non-colliding red capture-area disc, segmented boundary, and floating label. The indicator follows `SeekerHoldingSpawn` if the marker moves and is never baked into the Studio-authored map.
@@ -117,6 +118,7 @@ WaitingToStart -> SelectingRoles -> Hiding -> Seeking
 - A right-side **HIDER ROSTER** groups every round hider under **ACTIVE**, **TAGGED**, or **ELIMINATED**, with player avatars, names, counts, and practice-bot fallbacks.
 - Eliminating the final hider displays the completed roster for two seconds, then automatically resets the round and starts a new round when enough players remain.
 - The HUD gives seekers and tagged hiders role-specific instructions and shows how many pending tags will be banked together.
+- A tagged real hider gets a bright red border around the entire screen and the warning `YOU'VE BEEN TAGGED. RUN TO THE POST BEFORE THE SEEKER TO WIN` until their tag status changes.
 - When Seeking begins, mouse camera movement is restored immediately while the black camera layer fades away.
 - The countdown is hidden.
 - This phase has no time limit.
@@ -155,7 +157,7 @@ WaitingToStart -> SelectingRoles -> Hiding -> Seeking
 - In Roblox Studio only, a one-player session automatically starts a practice round when `StudioPracticeEnabled` is true.
 - The real player is assigned seeker and two labeled, stationary practice hider mannequins spawn at shuffled markers beneath `HiderSpawns`.
 - Practice rounds use a one-second role reveal and a three-second hiding countdown by default, after the normal five-second connection delay.
-- Practice hiders use the same server raycast, pending-tag, seeker-post return, and final-round-reset logic as real hiders.
+- Practice hiders use the same full-body tag volume, server casts, pending-tag, seeker-post return, and final-round-reset logic as real hiders.
 - With two or more connected players, the normal player-only round starts and no practice mannequins are created.
 - `RunService:IsStudio()` guards the entire feature, so practice hiders cannot appear in a published server even if the replicated configuration attribute remains enabled.
 
@@ -186,6 +188,7 @@ Select `ReplicatedStorage.RoundState` in Studio and edit its attributes:
 | `SelectionUserIds` | empty | Comma-separated candidate UserIds in shuffled display order. Runtime-owned by the server. |
 | `SelectedSeekerUserId` | `0` | Server-selected roulette target. Runtime-owned by the server. |
 | `HiderRosterJson` | `[]` | Ordered JSON roster of real and practice hiders with `Active`, `Tagged`, or `Eliminated` status. Runtime-owned by the server. |
+| `TagAssistRadius` | `1.5` | Radius in studs for the forgiving tag spherecast used after the exact center ray misses. Clamped from 0 (disabled) through 4. |
 | `StudioPracticeEnabled` | `true` | Enables automatic one-player practice rounds in Studio only. |
 | `StudioPracticeHiderCount` | `2` | Number of practice mannequins, clamped from 1 through 4. |
 | `StudioPracticeHidingDuration` | `3` | Studio practice hiding countdown in seconds. Minimum effective value is 1. |
@@ -214,6 +217,7 @@ ReplicatedStorage
     │              ConnectedPlayers, RoleSelectionDuration,
     │              RoleSelectionEndTime, SelectionUserIds,
     │              SelectedSeekerUserId, HiderRosterJson,
+    │              TagAssistRadius,
     │              StudioPracticeEnabled,
     │              StudioPracticeHiderCount,
     │              StudioPracticeHidingDuration, PracticeModeActive,
@@ -267,7 +271,7 @@ Responsibilities:
 - Reposition characters on assignment and respawn using each marker's full `CFrame` plus a small vertical offset.
 - Give every connected player a stable waiting-area slot on a six-stud grid around `WaitingSpawn`, reclaiming the slot when they leave.
 - Reset when the seeker or final hider leaves, while allowing rounds to continue after spectator departures or a non-final hider departure.
-- Validate seeker aim and line of sight, track multiple pending tags, and eliminate the full tagged group when the seeker returns to the holding post.
+- Generate query-only full-body tag volumes and validate exact and forgiving seeker aim with final thin-ray line of sight, then track multiple pending tags and eliminate the full group at the holding post.
 - Generate and maintain the Seeking-only visual indicator for the post's 8-stud capture area at runtime.
 - Replicate the ordered hider roster and its Active, Tagged, and Eliminated transitions as JSON.
 - Promote eliminated hiders to spectators and reset automatically after the final hider is eliminated.
@@ -287,6 +291,7 @@ Responsibilities:
 - Show role-specific phase prompts for hiding, aiming/tagging, returning to the post, being tagged, and spectating.
 - Render the seeker's center-screen crosshair and submit left-click aim rays during Seeking.
 - Render the right-side hider roster with separate Active, Tagged, and Eliminated sections.
+- Render an unmistakable full-screen red perimeter and expanded warning prompt for the locally tagged hider.
 - Render the synchronized avatar roulette during `SelectingRoles`, with a server-clock-driven ease-out that lands on the authoritative seeker.
 - Pulse the final five countdown values.
 - Send reset requests from the reset button or held `R` key.
@@ -353,8 +358,10 @@ Then use Studio's **Server & Clients** test mode with two through five clients. 
 - A reset clears role attributes, spreads everyone around `WaitingSpawn`, and automatically schedules a fresh random selection when at least two players remain.
 - Respawning returns a participant to the spawn appropriate for their current role and phase.
 - A seeker departure or final-hider departure resets; one hider leaving while another remains continues; spectator departure does not affect the round.
-- A seeker click only tags a living hider directly under the crosshair with unobstructed line of sight; walls and non-hider characters block the ray.
+- A seeker click prioritizes a living hider directly under the crosshair, then accepts a near miss within `TagAssistRadius`; walls, corners, and non-hider characters still block the final line-of-sight check.
+- Head, torso, arms, legs, and the spaces between them are covered by the active hider's invisible tag volume; removing a hider's active role removes that volume.
 - Multiple distinct hiders can be tagged before returning, while duplicate clicks on an already-tagged hider are ignored.
+- A tagged hider sees the red screen border and full race-to-post warning immediately; other hiders and the seeker do not see that local alert.
 - The seeker must cross outside the post's outer radius before returning; character reset/respawn at the post does not eliminate pending hiders.
 - The runtime post indicator appears only during Seeking, sits flush on the sampled ground, matches the horizontal 8-stud capture radius, and follows the marker after a `CFrame` change.
 - One return promotes every tagged real hider to spectator and removes every tagged practice hider.
