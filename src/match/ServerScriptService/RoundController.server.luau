@@ -164,47 +164,6 @@ for index = 1, POST_INDICATOR_SEGMENT_COUNT do
 	table.insert(seekerPostIndicatorSegments, segment)
 end
 
-local seekerPostBillboard = Instance.new("BillboardGui")
-seekerPostBillboard.Name = "Label"
-seekerPostBillboard.Adornee = seekerPostIndicatorAnchor
-seekerPostBillboard.AlwaysOnTop = true
-seekerPostBillboard.Enabled = false
-seekerPostBillboard.LightInfluence = 0
-seekerPostBillboard.MaxDistance = 250
-seekerPostBillboard.Size = UDim2.fromOffset(230, 58)
-seekerPostBillboard.StudsOffsetWorldSpace = Vector3.new(0, 3.8, 0)
-seekerPostBillboard.Parent = seekerPostIndicatorAnchor
-
-local seekerPostLabel = Instance.new("TextLabel")
-seekerPostLabel.BackgroundColor3 = Color3.fromRGB(15, 22, 34)
-seekerPostLabel.BackgroundTransparency = 0.16
-seekerPostLabel.BorderSizePixel = 0
-seekerPostLabel.Font = Enum.Font.GothamBold
-seekerPostLabel.Size = UDim2.fromScale(1, 1)
-seekerPostLabel.Text = "SEEKER POST\nRETURN TAGS HERE"
-seekerPostLabel.TextColor3 = Color3.fromRGB(255, 230, 230)
-seekerPostLabel.TextScaled = true
-seekerPostLabel.TextStrokeColor3 = Color3.fromRGB(40, 8, 12)
-seekerPostLabel.TextStrokeTransparency = 0.45
-seekerPostLabel.Parent = seekerPostBillboard
-
-local seekerPostLabelCorner = Instance.new("UICorner")
-seekerPostLabelCorner.CornerRadius = UDim.new(0, 10)
-seekerPostLabelCorner.Parent = seekerPostLabel
-
-local seekerPostLabelStroke = Instance.new("UIStroke")
-seekerPostLabelStroke.Color = POST_INDICATOR_COLOR
-seekerPostLabelStroke.Thickness = 2
-seekerPostLabelStroke.Transparency = 0.12
-seekerPostLabelStroke.Parent = seekerPostLabel
-
-local seekerPostLabelPadding = Instance.new("UIPadding")
-seekerPostLabelPadding.PaddingBottom = UDim.new(0, 5)
-seekerPostLabelPadding.PaddingLeft = UDim.new(0, 9)
-seekerPostLabelPadding.PaddingRight = UDim.new(0, 9)
-seekerPostLabelPadding.PaddingTop = UDim.new(0, 5)
-seekerPostLabelPadding.Parent = seekerPostLabel
-
 local seekerPostGroundRaycastParameters = RaycastParams.new()
 seekerPostGroundRaycastParameters.FilterType = Enum.RaycastFilterType.Exclude
 seekerPostGroundRaycastParameters.FilterDescendantsInstances = { roundSpawns, seekerPostIndicator }
@@ -290,7 +249,6 @@ local function updateSeekerPostIndicatorVisibility()
 	for _, segment in seekerPostIndicatorSegments do
 		segment.Transparency = if visible then 0.08 else 1
 	end
-	seekerPostBillboard.Enabled = visible
 end
 
 seekerPostIndicator.Parent = Workspace
