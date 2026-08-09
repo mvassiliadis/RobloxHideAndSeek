@@ -12,6 +12,7 @@ local React = require(packages:WaitForChild("React"))
 
 local roundState = ReplicatedStorage:WaitForChild("RoundState")
 local resetRequested = roundState:WaitForChild("ResetRequested") :: RemoteEvent
+local tagRequested = roundState:WaitForChild("TagRequested") :: RemoteEvent
 local returnToLobbyRequested = roundState:WaitForChild("ReturnToLobbyRequested") :: RemoteEvent
 local localPlayer = Players.LocalPlayer
 
@@ -72,6 +73,9 @@ local function RoundApp()
 	local selectedSeekerUserId, setSelectedSeekerUserId = React.useState(roundState:GetAttribute("SelectedSeekerUserId"))
 	local roleSelectionDuration, setRoleSelectionDuration = React.useState(roundState:GetAttribute("RoleSelectionDuration"))
 	local roleSelectionEndTime, setRoleSelectionEndTime = React.useState(roundState:GetAttribute("RoleSelectionEndTime"))
+	local taggedHiderUserId, setTaggedHiderUserId = React.useState(roundState:GetAttribute("TaggedHiderUserId"))
+	local taggedHiderName, setTaggedHiderName = React.useState(roundState:GetAttribute("TaggedHiderName"))
+	local practiceModeActive, setPracticeModeActive = React.useState(roundState:GetAttribute("PracticeModeActive"))
 	local selectionIndex, setSelectionIndex = React.useState(1)
 	local role, setRole = React.useState(localPlayer:GetAttribute("Role"))
 	local buttonText, setButtonText = React.useState("RESET ROUND")
@@ -223,6 +227,15 @@ local function RoundApp()
 			roundState:GetAttributeChangedSignal("RoleSelectionEndTime"):Connect(function()
 				setRoleSelectionEndTime(roundState:GetAttribute("RoleSelectionEndTime"))
 			end),
+			roundState:GetAttributeChangedSignal("TaggedHiderUserId"):Connect(function()
+				setTaggedHiderUserId(roundState:GetAttribute("TaggedHiderUserId"))
+			end),
+			roundState:GetAttributeChangedSignal("TaggedHiderName"):Connect(function()
+				setTaggedHiderName(roundState:GetAttribute("TaggedHiderName"))
+			end),
+			roundState:GetAttributeChangedSignal("PracticeModeActive"):Connect(function()
+				setPracticeModeActive(roundState:GetAttribute("PracticeModeActive"))
+			end),
 			localPlayer:GetAttributeChangedSignal("Role"):Connect(function()
 				setRole(localPlayer:GetAttribute("Role"))
 			end),
@@ -248,6 +261,16 @@ local function RoundApp()
 
 				if input.KeyCode == Enum.KeyCode.R and not gameProcessed then
 					beginKeyboardReset()
+				elseif input.UserInputType == Enum.UserInputType.MouseButton1
+					and not gameProcessed
+					and not altHeldRef.current
+					and roundState:GetAttribute("Phase") == "Seeking"
+					and localPlayer:GetAttribute("Role") == "Seeker"
+				then
+					local camera = Workspace.CurrentCamera
+					if camera then
+						tagRequested:FireServer(camera.CFrame.Position, camera.CFrame.LookVector)
+					end
 				end
 			end),
 			UserInputService.InputEnded:Connect(function(input)
@@ -284,13 +307,22 @@ local function RoundApp()
 	local numericSelectedSeekerUserId = if typeof(selectedSeekerUserId) == "number" then selectedSeekerUserId else 0
 	local numericRoleSelectionDuration = if typeof(roleSelectionDuration) == "number" then roleSelectionDuration else 5
 	local numericRoleSelectionEndTime = if typeof(roleSelectionEndTime) == "number" then roleSelectionEndTime else 0
+	local numericTaggedHiderUserId = if typeof(taggedHiderUserId) == "number" then taggedHiderUserId else 0
+	local currentTaggedHiderName = if typeof(taggedHiderName) == "string" then taggedHiderName else ""
 	local selectionCandidates = parseUserIds(selectionUserIds)
 	local waiting = phase == "WaitingToStart"
-	local starting = waiting and numericConnectedPlayers >= 2 and numericStartTimeRemaining > 0
+	local starting = waiting and numericStartTimeRemaining > 0
+	local soloPracticeWaiting = starting
+		and numericConnectedPlayers == 1
+		and RunService:IsStudio()
+		and roundState:GetAttribute("StudioPracticeEnabled") == true
 	local selecting = phase == "SelectingRoles"
 	local seeking = phase == "Seeking"
 	local timerVisible = phase == "Hiding"
 	local timerWarning = timerVisible and numericTimeRemaining <= 5 and numericTimeRemaining > 0
+	local hasPendingTag = currentTaggedHiderName ~= ""
+	local localPlayerIsTagged = numericTaggedHiderUserId ~= 0 and numericTaggedHiderUserId == localPlayer.UserId
+	local taggedHiderDisplayName = if hasPendingTag then string.upper(currentTaggedHiderName) else "HIDER"
 
 	React.useEffect(function()
 		if not selecting or #selectionCandidates == 0 then
@@ -353,16 +385,20 @@ local function RoundApp()
 	end, { numericTimeRemaining, timerWarning })
 
 	local phaseText = if starting
-		then "ROUND STARTING"
+		then if soloPracticeWaiting then "PRACTICE ROUND STARTING" else "ROUND STARTING"
 		elseif waiting
 		then "WAITING FOR PLAYERS"
 		elseif selecting
 		then "CHOOSING THE SEEKER"
 		elseif seeking
 		then if role == "Seeker"
-			then "FIND THEM!"
+			then if hasPendingTag
+				then `RETURN TO THE SEEKER POST\nTO ELIMINATE {taggedHiderDisplayName}`
+				else "FIND A HIDER\nAIM AND CLICK TO TAG"
 			elseif role == "Hider"
-			then "STAY OUT OF SIGHT OF THE SEEKER"
+			then if localPlayerIsTagged
+				then "YOU HAVE BEEN TAGGED!\nTHE SEEKER IS RETURNING TO THE POST"
+				else "STAY OUT OF SIGHT OF THE SEEKER"
 			else "SEEKING"
 		else if role == "Seeker"
 		then "WAIT FOR PLAYERS TO HIDE"
@@ -371,10 +407,12 @@ local function RoundApp()
 		else "HIDING"
 	local phaseColor = if waiting then WAITING_COLOR elseif seeking then SEEKING_COLOR else HIDING_COLOR
 	local waitingStatusText = if starting
-		then `Starting in {math.max(0, math.floor(numericStartTimeRemaining))}...`
+		then if soloPracticeWaiting
+			then `Solo practice starting in {math.max(0, math.floor(numericStartTimeRemaining))}...`
+			else `Starting in {math.max(0, math.floor(numericStartTimeRemaining))}...`
 		else "Need at least 2 players"
 	local roleText = if role == "Seeker"
-		then "You are the seeker"
+		then if practiceModeActive == true then "You are the seeker (practice)" else "You are the seeker"
 		elseif role == "Hider"
 		then "You are hiding"
 		elseif role == "Spectator"
@@ -387,6 +425,13 @@ local function RoundApp()
 		else Color3.fromRGB(210, 216, 225)
 	local hasRole = roleText ~= ""
 	local compactSelectionCards = UserInputService.TouchEnabled
+	local controlsGuideText = if cursorActive
+		then CURSOR_GUIDE_TEXT
+		elseif seeking and role == "Seeker" and hasPendingTag
+		then "WASD  MOVE   •   MOUSE  LOOK\nRETURN TO THE SEEKER POST"
+		elseif seeking and role == "Seeker"
+		then "WASD  MOVE   •   MOUSE  LOOK\nLEFT CLICK  TAG A VISIBLE HIDER"
+		else DEFAULT_GUIDE_TEXT
 	local selectionCardWidth = if compactSelectionCards then 54 else 86
 	local selectionAvatarSize = if compactSelectionCards then 42 else 72
 	local selectionCards = {
@@ -500,7 +545,7 @@ local function RoundApp()
 			BackgroundTransparency = 1,
 			FontFace = GOTHAM_BOLD,
 			Position = if hasRole then UDim2.new(0.5, 0, 0, 58) else UDim2.new(0.5, 0, 0, 18),
-			Size = UDim2.new(0.68, 0, 0, 42),
+			Size = UDim2.new(0.68, 0, 0, if seeking and role ~= "Spectator" then 78 else 42),
 			Text = phaseText,
 			TextColor3 = phaseColor,
 			TextScaled = true,
@@ -513,6 +558,55 @@ local function RoundApp()
 			UITextSizeConstraint = e("UITextSizeConstraint", {
 				MaxTextSize = 36,
 				MinTextSize = 20,
+			}),
+		}),
+
+		Crosshair = e("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			BackgroundTransparency = 1,
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(34, 34),
+			Visible = seeking and role == "Seeker" and not cursorActive,
+			ZIndex = 4,
+		}, {
+			Top = e("Frame", {
+				AnchorPoint = Vector2.new(0.5, 1),
+				BackgroundColor3 = if hasPendingTag then SEEKING_COLOR else Color3.new(1, 1, 1),
+				BorderSizePixel = 0,
+				Position = UDim2.new(0.5, 0, 0.5, -4),
+				Size = UDim2.fromOffset(2, 8),
+			}),
+			Bottom = e("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0),
+				BackgroundColor3 = if hasPendingTag then SEEKING_COLOR else Color3.new(1, 1, 1),
+				BorderSizePixel = 0,
+				Position = UDim2.new(0.5, 0, 0.5, 4),
+				Size = UDim2.fromOffset(2, 8),
+			}),
+			Left = e("Frame", {
+				AnchorPoint = Vector2.new(1, 0.5),
+				BackgroundColor3 = if hasPendingTag then SEEKING_COLOR else Color3.new(1, 1, 1),
+				BorderSizePixel = 0,
+				Position = UDim2.new(0.5, -4, 0.5, 0),
+				Size = UDim2.fromOffset(8, 2),
+			}),
+			Right = e("Frame", {
+				AnchorPoint = Vector2.new(0, 0.5),
+				BackgroundColor3 = if hasPendingTag then SEEKING_COLOR else Color3.new(1, 1, 1),
+				BorderSizePixel = 0,
+				Position = UDim2.new(0.5, 4, 0.5, 0),
+				Size = UDim2.fromOffset(8, 2),
+			}),
+			Dot = e("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				BackgroundColor3 = if hasPendingTag then SEEKING_COLOR else Color3.new(1, 1, 1),
+				BorderSizePixel = 0,
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(4, 4),
+			}, {
+				Corner = e("UICorner", {
+					CornerRadius = UDim.new(1, 0),
+				}),
 			}),
 		}),
 
@@ -627,7 +721,7 @@ local function RoundApp()
 			BorderSizePixel = 0,
 			FontFace = GOTHAM_BOLD,
 			Position = UDim2.new(0.5, 0, 0, 14),
-			Size = UDim2.fromOffset(220, 38),
+			Size = UDim2.fromOffset(if practiceModeActive == true then 280 else 220, 38),
 			Text = roleText,
 			TextColor3 = roleColor,
 			TextSize = 20,
@@ -709,7 +803,7 @@ local function RoundApp()
 			FontFace = GOTHAM_MEDIUM,
 			Position = UDim2.new(0, 18, 1, -18),
 			Size = UDim2.fromOffset(315, 62),
-			Text = if cursorActive then CURSOR_GUIDE_TEXT else DEFAULT_GUIDE_TEXT,
+			Text = controlsGuideText,
 			TextColor3 = if cursorActive then CURSOR_GUIDE_COLOR else DEFAULT_GUIDE_COLOR,
 			TextSize = 13,
 			TextTransparency = 0.12,

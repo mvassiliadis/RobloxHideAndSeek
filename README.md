@@ -79,7 +79,7 @@ WaitingToStart -> SelectingRoles -> Hiding -> Seeking
 
 - This is the first phase of every initial or reset round.
 - The timer is hidden.
-- With fewer than two connected players, the HUD displays **WAITING FOR PLAYERS** and `Need at least 2 players`.
+- With fewer than two connected players, the HUD displays **WAITING FOR PLAYERS** and `Need at least 2 players`, except when Studio solo practice is enabled.
 - With at least two connected players, the HUD displays **ROUND STARTING** and the replicated five-second startup countdown.
 - A player joining or leaving while waiting cancels and restarts the countdown so direct Studio test clients have time to connect.
 - No world interaction, Lobby data, teleport data, or `SeekerSpot` proximity is required.
@@ -107,10 +107,15 @@ WaitingToStart -> SelectingRoles -> Hiding -> Seeking
 
 ### 4. Seeking
 
-- The HUD displays **SEEKING**.
+- The seeker gets a center-screen crosshair and can point at a visible hider and left-click to tag them.
+- The server raycasts the submitted first-person aim, enforces a 300-stud maximum range, and accepts only living hiders with unobstructed line of sight.
+- Only one hider can be tagged at a time. The tagged hider remains active while the seeker carries the pending tag.
+- To eliminate the tagged hider, the seeker must return to `SeekerHoldingSpawn`. The seeker must have moved outside the post's 12-stud outer radius before entering its 8-stud capture radius, so respawning at the post cannot bank a tag.
+- An eliminated hider becomes a spectator and is moved to their waiting-area slot. The seeker can then find and tag the next hider.
+- Eliminating the final hider automatically resets the round and starts a new round when enough players remain.
+- The HUD gives the seeker and tagged hider role-specific instructions and shows the tagged player's display name to the seeker.
 - The countdown is hidden.
-- This phase currently lasts indefinitely.
-- The only way to leave Seeking is to reset the round.
+- This phase has no time limit.
 - Late joiners become spectators and are kept in distinct slots around `WaitingSpawn` rather than joining the active round.
 
 ### Reset behavior
@@ -118,8 +123,8 @@ WaitingToStart -> SelectingRoles -> Hiding -> Seeking
 - Any player can reset because all current users are treated as playtesters.
 - Resets are sent to the server through `ResetRequested` and are debounced for one second.
 - Reset increments `RoundNumber` and the controller generation, cancelling either startup or Hiding countdown work.
-- It clears server role/spawn assignments and every player's replicated `Role` attribute, resets both timers, spreads remaining characters around `WaitingSpawn`, and enters `WaitingToStart`.
-- If at least two players remain, reset automatically schedules a completely new random role selection after the normal startup delay.
+- It clears server role/spawn assignments, any pending tag, and every player's replicated `Role` attribute; resets both timers; spreads remaining characters around `WaitingSpawn`; and enters `WaitingToStart`.
+- If at least two players remain—or one Studio player with practice enabled—reset automatically schedules a new round after the normal startup delay.
 - If the active seeker leaves, or the last active hider leaves, the server performs the same reset. One hider leaving while another remains does not end the round; spectators leaving have no round effect.
 
 ## Player controls
@@ -128,6 +133,7 @@ WaitingToStart -> SelectingRoles -> Hiding -> Seeking
 
 - `WASD`: move.
 - Mouse: look around in first person.
+- Left mouse button while Seeking as the seeker: tag the visible hider under the crosshair.
 - Hold `Left Alt`: temporarily unlock and show the cursor so UI buttons can be clicked.
 - Release `Left Alt`: return to locked first-person mouse control.
 - Hold `R` for one second: reset the round. The hold requirement reduces accidental resets.
@@ -139,6 +145,15 @@ WaitingToStart -> SelectingRoles -> Hiding -> Seeking
 - The reset button uses `GuiButton.Activated`, which is cross-platform.
 - The desktop controls guide is hidden when a keyboard is not available.
 - Explicit gamepad selection/navigation configuration has not yet been added or comprehensively tested.
+
+### Studio solo practice
+
+- In Roblox Studio only, a one-player session automatically starts a practice round when `StudioPracticeEnabled` is true.
+- The real player is assigned seeker and two labeled, stationary practice hider mannequins spawn at shuffled markers beneath `HiderSpawns`.
+- Practice rounds use a one-second role reveal and a three-second hiding countdown by default, after the normal five-second connection delay.
+- Practice hiders use the same server raycast, pending-tag, seeker-post return, and final-round-reset logic as real hiders.
+- With two or more connected players, the normal player-only round starts and no practice mannequins are created.
+- `RunService:IsStudio()` guards the entire feature, so practice hiders cannot appear in a published server even if the replicated configuration attribute remains enabled.
 
 ### macOS cursor handling
 
@@ -166,6 +181,12 @@ Select `ReplicatedStorage.RoundState` in Studio and edit its attributes:
 | `RoleSelectionEndTime` | `0` | Server-clock deadline used to synchronize roulette animation. Runtime-owned by the server. |
 | `SelectionUserIds` | empty | Comma-separated candidate UserIds in shuffled display order. Runtime-owned by the server. |
 | `SelectedSeekerUserId` | `0` | Server-selected roulette target. Runtime-owned by the server. |
+| `TaggedHiderUserId` | `0` | UserId of the hider awaiting elimination, or `0` when no tag is pending. Runtime-owned by the server. |
+| `TaggedHiderName` | empty | Display name of the real or practice hider awaiting elimination. Runtime-owned by the server. |
+| `StudioPracticeEnabled` | `true` | Enables automatic one-player practice rounds in Studio only. |
+| `StudioPracticeHiderCount` | `2` | Number of practice mannequins, clamped from 1 through 4. |
+| `StudioPracticeHidingDuration` | `3` | Studio practice hiding countdown in seconds. Minimum effective value is 1. |
+| `PracticeModeActive` | `false` | Whether the current active round is a Studio practice round. Runtime-owned by the server. |
 | `RoundNumber` | `0` in Edit mode | Incremented whenever a round is initialized or reset. |
 | `HidingDuration` | `30` | Hiding duration in seconds. Minimum effective value is 1. |
 
@@ -177,6 +198,8 @@ Other constants currently live in scripts:
 - Role-selection reveal: `5` seconds in `RoundController`.
 - Server reset debounce: `1` second in `RoundController`.
 - Desktop `R` hold duration: `1` second in `RoundApp`.
+- Maximum tag distance: `300` studs in `RoundController`.
+- Seeker-post capture radius: `8` studs, after crossing a `12`-stud outer radius, in `RoundController`.
 
 ## Studio hierarchy and ownership
 
@@ -187,8 +210,13 @@ ReplicatedStorage
     ├── attributes: Phase, TimeRemaining, StartTimeRemaining,
     │              ConnectedPlayers, RoleSelectionDuration,
     │              RoleSelectionEndTime, SelectionUserIds,
-    │              SelectedSeekerUserId, RoundNumber, HidingDuration
+    │              SelectedSeekerUserId, TaggedHiderUserId,
+    │              TaggedHiderName, StudioPracticeEnabled,
+    │              StudioPracticeHiderCount,
+    │              StudioPracticeHidingDuration, PracticeModeActive,
+    │              RoundNumber, HidingDuration
     ├── ResetRequested (RemoteEvent)
+    ├── TagRequested (RemoteEvent)
     └── ReturnToLobbyRequested (RemoteEvent)
 
 ServerScriptService
@@ -204,7 +232,7 @@ StarterGui
     ├── RoundApp (ModuleScript)
     └── RoundUI (LocalScript bootstrap)
 
-During Play, React creates the normal phase/role/timer HUD plus `SelectionOverlay`, its roulette candidate cards, `ResetButton`, and `ControlsGuide` beneath `ReactRoot`.
+During Play, React creates the normal phase/role/timer HUD plus `SelectionOverlay`, its roulette candidate cards, the seeker crosshair, `ResetButton`, and `ControlsGuide` beneath `ReactRoot`.
 
 Workspace
 ├── Terrain
@@ -236,6 +264,9 @@ Responsibilities:
 - Reposition characters on assignment and respawn using each marker's full `CFrame` plus a small vertical offset.
 - Give every connected player a stable waiting-area slot on a six-stud grid around `WaitingSpawn`, reclaiming the slot when they leave.
 - Reset when the seeker or final hider leaves, while allowing rounds to continue after spectator departures or a non-final hider departure.
+- Validate seeker aim and line of sight, track one pending tag, and eliminate it when the seeker returns to the holding post.
+- Promote eliminated hiders to spectators and reset automatically after the final hider is eliminated.
+- In Studio, create and clean up one-player practice rounds with configurable, raycastable hider mannequins.
 - Replicate state through `RoundState` attributes.
 - Accept playtester reset requests with server-side debounce.
 
@@ -245,10 +276,11 @@ The server script intentionally fails startup validation when required spawn con
 
 Responsibilities:
 
-- Render all three phase states from replicated attributes.
+- Render all round phase states from replicated attributes.
 - Show/hide the Hiding timer and distinguish waiting-for-players from automatic-start countdown state.
 - Display the local player's replicated assignment as `You are the seeker`, `You are hiding`, or `You are spectating` throughout the active round.
-- Show role-specific phase prompts: seekers see `WAIT FOR PLAYERS TO HIDE` then `FIND THEM!`; hiders see `GO HIDE!` then `STAY OUT OF SIGHT OF THE SEEKER`.
+- Show role-specific phase prompts for hiding, aiming/tagging, returning to the post, being tagged, and spectating.
+- Render the seeker's center-screen crosshair and submit left-click aim rays during Seeking.
 - Render the synchronized avatar roulette during `SelectingRoles`, with a server-clock-driven ease-out that lands on the authoritative seeker.
 - Pulse the final five countdown values.
 - Send reset requests from the reset button or held `R` key.
@@ -298,11 +330,13 @@ Because the developer is modifying the map directly in Studio, refresh the hiera
 
 Filesystem validation for this implementation includes both `rojo sourcemap match.project.json` and `rojo build match.project.json`. Because the spawn hierarchy is Studio-owned, normal testing must use Rojo live sync against the existing Match place rather than treating the filesystem-only build as a complete map.
 
-A one-client Play check on 2026-08-05 confirmed that the updated controller and HUD load without console errors, remain in `WaitingToStart`, keep `Role` clear, place the character at `WaitingSpawn`, replicate `ConnectedPlayers = 1`, and display **WAITING FOR PLAYERS** / `Need at least 2 players`. The available Studio bridge does not launch multi-client Server & Clients sessions, so the following multiplayer matrix remains a manual Studio check.
+A one-client Play check on 2026-08-05 confirmed the pre-practice controller and HUD loaded without console errors. That check predates Studio solo practice and must be repeated after syncing this version. The available Studio bridge does not launch multi-client Server & Clients sessions, so the multiplayer matrix remains a manual Studio check.
 
-Use Studio's **Server & Clients** test mode with two through five clients. The five-second startup delay is specifically intended to absorb asynchronous test-client connections. Verify:
+For a fast solo check, use normal **Test** mode with one player. Confirm that the HUD announces a practice round, two labeled mannequins appear at hider markers, both can be tagged and banked at the seeker post, and the final mannequin resets the round.
 
-- One client remains in `WaitingToStart` indefinitely, and waiting characters occupy separate slots around `WaitingSpawn`.
+Then use Studio's **Server & Clients** test mode with two through five clients. The five-second startup delay is specifically intended to absorb asynchronous test-client connections. Verify:
+
+- One client starts a Studio-only practice round when practice is enabled; disabling `StudioPracticeEnabled` restores indefinite `WaitingToStart` behavior.
 - Two through five clients produce exactly one `Seeker`, between one and four `Hider` attributes, no spectators, and unique hider marker assignments.
 - A waiting roster change restarts the startup countdown; dropping below two cancels it.
 - After startup, all clients show the same candidate icons for five seconds, slow onto the selected seeker, and receive no active role attribute until the reveal completes.
@@ -310,6 +344,10 @@ Use Studio's **Server & Clients** test mode with two through five clients. The f
 - A reset clears role attributes, spreads everyone around `WaitingSpawn`, and automatically schedules a fresh random selection when at least two players remain.
 - Respawning returns a participant to the spawn appropriate for their current role and phase.
 - A seeker departure or final-hider departure resets; one hider leaving while another remains continues; spectator departure does not affect the round.
+- A seeker click only tags a living hider directly under the crosshair with unobstructed line of sight; walls and non-hider characters block the ray.
+- Only one pending tag is accepted, and the tagged hider remains active until the seeker returns to `SeekerHoldingSpawn`.
+- The seeker must cross outside the post's outer radius before returning; character reset/respawn at the post does not eliminate the pending hider.
+- Returning to the post promotes the tagged hider to spectator, and eliminating the final hider resets the round.
 - Late joiners during Hiding or Seeking receive `Spectator` and stay in separate slots around `WaitingSpawn`.
 - No transition depends on touching, approaching, or retaining `SeekerSpot`.
 
@@ -317,11 +355,9 @@ For overflow testing above five players, verify that only five shuffled players 
 
 ## Known missing gameplay
 
-The project has a round shell, not yet a complete hide-and-seek game. The following systems do not currently exist:
+The project is an early playable hide-and-seek game. The following systems do not currently exist:
 
-- Tag/catch mechanics.
-- Hider elimination and promotion to spectator after being caught.
-- Win conditions and automatic end-of-round behavior.
+- A dedicated victory/results phase before the automatic round reset.
 - A timed Seeking phase.
 - Dedicated spectator camera/UI behavior beyond the replicated role and waiting-area spawn.
 - Multiple maps or map rotation.
@@ -333,8 +369,8 @@ The project has a round shell, not yet a complete hide-and-seek game. The follow
 
 1. Deliberately position and orient the temporary waiting, seeker, and hider markers in the final map layout.
 2. Run two-to-five-client Server & Clients tests after syncing the Match project.
-3. Implement server-authoritative tagging and elimination.
-4. Add a Seeking duration and win conditions.
+3. Add a victory/results presentation and optional Seeking duration.
+4. Add dedicated spectator camera controls.
 5. Restrict reset access before inviting non-playtesters.
 6. Rename generic obstacle parts or group them into maintainable models.
 7. Add audio and clearer feedback for phase transitions.

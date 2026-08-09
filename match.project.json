@@ -36,11 +36,21 @@
             "RoleSelectionEndTime": { "Float64": 0 },
             "SelectionUserIds": { "String": "" },
             "SelectedSeekerUserId": { "Float64": 0 },
+            "TaggedHiderUserId": { "Float64": 0 },
+            "TaggedHiderName": { "String": "" },
+            "StudioPracticeEnabled": { "Bool": true },
+            "StudioPracticeHiderCount": { "Float64": 2 },
+            "StudioPracticeHidingDuration": { "Float64": 3 },
+            "PracticeModeActive": { "Bool": false },
             "RoundNumber": { "Float64": 0 },
             "HidingDuration": { "Float64": 30 }
           }
         },
         "ResetRequested": {
+          "$className": "RemoteEvent"
+        },
+
+        "TagRequested": {
           "$className": "RemoteEvent"
         },
 

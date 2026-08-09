@@ -2,6 +2,7 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local MIN_PLAYERS = 2
@@ -9,6 +10,7 @@ local MAX_HIDERS = 4
 local MAX_ROUND_PLAYERS = 1 + MAX_HIDERS
 local AUTOMATIC_START_DELAY = 5
 local ROLE_SELECTION_DURATION = 5
+local PRACTICE_ROLE_SELECTION_DURATION = 1
 
 local WAITING_PHASE = "WaitingToStart"
 local SELECTING_PHASE = "SelectingRoles"
@@ -21,11 +23,18 @@ local RESET_DEBOUNCE_SECONDS = 1
 local CHARACTER_SPAWN_OFFSET = 3
 local WAITING_SPAWN_COLUMNS = 4
 local WAITING_SPAWN_SPACING = 6
+local MAX_TAG_DISTANCE = 300
+local MAX_CAMERA_ORIGIN_OFFSET = 8
+local TAG_REQUEST_COOLDOWN = 0.15
+local POST_CAPTURE_RADIUS = 8
+local POST_AWAY_RADIUS = 12
 
 type Role = "Seeker" | "Hider" | "Spectator"
+type TagTarget = Player | Model
 
 local roundState = ReplicatedStorage:WaitForChild("RoundState")
 local resetRequested = roundState:WaitForChild("ResetRequested") :: RemoteEvent
+local tagRequested = roundState:WaitForChild("TagRequested") :: RemoteEvent
 local roundRandom = Random.new()
 
 local roundSpawnsInstance = Workspace:FindFirstChild("RoundSpawns")
@@ -84,8 +93,63 @@ local roleAssignments: { [Player]: Role } = {}
 local hiderSpawnAssignments: { [Player]: BasePart } = {}
 local waitingSpawnSlots: { [Player]: number } = {}
 local seekerPlayer: Player? = nil
+local practiceHiders: { Model } = {}
+local practiceHiderFolder: Folder? = nil
+local taggedHiderTarget: TagTarget? = nil
+local seekerWasAwayFromPost = false
+local lastTagRequestAt: { [Player]: number } = {}
+
+local function clearPendingTag()
+	local taggedHider = taggedHiderTarget
+	if taggedHider and taggedHider.Parent then
+		taggedHider:SetAttribute("Tagged", nil)
+	end
+
+	taggedHiderTarget = nil
+	seekerWasAwayFromPost = false
+	roundState:SetAttribute("TaggedHiderUserId", 0)
+	roundState:SetAttribute("TaggedHiderName", "")
+end
+
+local function clearPracticeHiders()
+	local folder = practiceHiderFolder
+	if folder then
+		folder:Destroy()
+	end
+
+	practiceHiderFolder = nil
+	table.clear(practiceHiders)
+	roundState:SetAttribute("PracticeModeActive", false)
+end
+
+local function getPracticeHiderCount(): number
+	local configuredCount = roundState:GetAttribute("StudioPracticeHiderCount")
+	if typeof(configuredCount) ~= "number" then
+		return 2
+	end
+
+	return math.clamp(math.floor(configuredCount), 1, MAX_HIDERS)
+end
+
+local function shouldUsePracticeHiders(connectedPlayers: { Player }): boolean
+	return RunService:IsStudio()
+		and roundState:GetAttribute("StudioPracticeEnabled") == true
+		and #connectedPlayers == 1
+end
+
+local function canStartRound(connectedPlayers: { Player }): boolean
+	return #connectedPlayers >= MIN_PLAYERS or shouldUsePracticeHiders(connectedPlayers)
+end
 
 local function getHidingDuration(): number
+	if roundState:GetAttribute("PracticeModeActive") == true then
+		local practiceDuration = roundState:GetAttribute("StudioPracticeHidingDuration")
+		if typeof(practiceDuration) == "number" then
+			return math.max(1, math.floor(practiceDuration))
+		end
+		return 3
+	end
+
 	local configuredDuration = roundState:GetAttribute("HidingDuration")
 	if typeof(configuredDuration) ~= "number" then
 		return 30
@@ -103,6 +167,140 @@ local function shuffledCopy<T>(items: { T }): { T }
 	end
 
 	return shuffled
+end
+
+local function createPracticeBodyPart(
+	model: Model,
+	name: string,
+	size: Vector3,
+	color: Color3,
+	cframe: CFrame,
+	shape: Enum.PartType?
+): Part
+	local part = Instance.new("Part")
+	part.Name = name
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanTouch = false
+	part.CanQuery = true
+	part.CastShadow = true
+	part.Color = color
+	part.Material = Enum.Material.SmoothPlastic
+	part.Size = size
+	part.CFrame = cframe
+	if shape then
+		part.Shape = shape
+	end
+	part.Parent = model
+
+	return part
+end
+
+local function createPracticeHider(index: number, marker: BasePart, parent: Folder): Model
+	local model = Instance.new("Model")
+	model.Name = `Practice Hider {index}`
+	model:SetAttribute("PracticeHider", true)
+	model:SetAttribute("PracticeIndex", index)
+	model.Parent = parent
+
+	local baseCFrame = marker.CFrame
+	local shirtColor = if index % 2 == 0
+		then Color3.fromRGB(75, 145, 255)
+		else Color3.fromRGB(93, 211, 151)
+	local skinColor = Color3.fromRGB(246, 205, 171)
+	local pantsColor = Color3.fromRGB(48, 58, 78)
+
+	local torso = createPracticeBodyPart(
+		model,
+		"Torso",
+		Vector3.new(2, 2, 1),
+		shirtColor,
+		baseCFrame * CFrame.new(0, 3.1, 0),
+		nil
+	)
+	createPracticeBodyPart(
+		model,
+		"Left Arm",
+		Vector3.new(0.8, 2, 0.8),
+		skinColor,
+		baseCFrame * CFrame.new(-1.45, 3.1, 0),
+		nil
+	)
+	createPracticeBodyPart(
+		model,
+		"Right Arm",
+		Vector3.new(0.8, 2, 0.8),
+		skinColor,
+		baseCFrame * CFrame.new(1.45, 3.1, 0),
+		nil
+	)
+	createPracticeBodyPart(
+		model,
+		"Left Leg",
+		Vector3.new(0.9, 2, 0.9),
+		pantsColor,
+		baseCFrame * CFrame.new(-0.5, 1.05, 0),
+		nil
+	)
+	createPracticeBodyPart(
+		model,
+		"Right Leg",
+		Vector3.new(0.9, 2, 0.9),
+		pantsColor,
+		baseCFrame * CFrame.new(0.5, 1.05, 0),
+		nil
+	)
+	local head = createPracticeBodyPart(
+		model,
+		"Head",
+		Vector3.new(1.8, 1.8, 1.8),
+		skinColor,
+		baseCFrame * CFrame.new(0, 5.05, 0),
+		Enum.PartType.Ball
+	)
+	model.PrimaryPart = torso
+
+	local nameplate = Instance.new("BillboardGui")
+	nameplate.Name = "PracticeNameplate"
+	nameplate.Adornee = head
+	nameplate.AlwaysOnTop = false
+	nameplate.LightInfluence = 0
+	nameplate.MaxDistance = 120
+	nameplate.Size = UDim2.fromOffset(150, 32)
+	nameplate.StudsOffset = Vector3.new(0, 1.6, 0)
+	nameplate.Parent = head
+
+	local label = Instance.new("TextLabel")
+	label.BackgroundColor3 = Color3.fromRGB(16, 23, 34)
+	label.BackgroundTransparency = 0.18
+	label.BorderSizePixel = 0
+	label.Font = Enum.Font.GothamBold
+	label.Size = UDim2.fromScale(1, 1)
+	label.Text = string.upper(model.Name)
+	label.TextColor3 = Color3.fromRGB(230, 239, 255)
+	label.TextScaled = true
+	label.TextStrokeTransparency = 0.45
+	label.Parent = nameplate
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 8)
+	corner.Parent = label
+
+	return model
+end
+
+local function spawnPracticeHiders()
+	local folder = Instance.new("Folder")
+	folder.Name = "StudioPracticeHiders"
+	folder.Parent = Workspace
+	practiceHiderFolder = folder
+
+	local shuffledMarkers = shuffledCopy(hiderSpawns)
+	for index = 1, getPracticeHiderCount() do
+		table.insert(practiceHiders, createPracticeHider(index, shuffledMarkers[index], folder))
+	end
+
+	roundState:SetAttribute("PracticeModeActive", true)
 end
 
 local function serializeUserIds(players: { Player }): string
@@ -132,6 +330,9 @@ local function updateConnectedPlayers(excludedPlayer: Player?)
 end
 
 local function clearAssignments()
+	clearPendingTag()
+	clearPracticeHiders()
+
 	if seekerPlayer then
 		local character = seekerPlayer.Character
 		local rootPart = character and character:FindFirstChild("HumanoidRootPart")
@@ -223,6 +424,11 @@ local function positionCharacterWhenReady(player: Player, character: Model)
 
 	pivotCharacterToAssignedSpawn(player, character)
 	setCharacterLocked(character, shouldLockPlayer(player))
+
+	if player == seekerPlayer and taggedHiderTarget then
+		-- Respawning at the post must not count as returning with a tagged hider.
+		seekerWasAwayFromPost = false
+	end
 end
 
 local scheduleAutomaticStart: (excludedPlayer: Player?) -> ()
@@ -282,11 +488,12 @@ local function beginRoleSelection(thisGeneration: number)
 
 	local connectedPlayers = getConnectedPlayers(nil)
 	updateConnectedPlayers(nil)
-	if #connectedPlayers < MIN_PLAYERS then
+	if not canStartRound(connectedPlayers) then
 		roundState:SetAttribute("StartTimeRemaining", 0)
 		return
 	end
 
+	local practiceRound = shouldUsePracticeHiders(connectedPlayers)
 	clearAssignments()
 	local shuffledPlayers = shuffledCopy(connectedPlayers)
 	local roulettePlayers = shuffledCopy(connectedPlayers)
@@ -307,16 +514,20 @@ local function beginRoleSelection(thisGeneration: number)
 
 		roleAssignments[player] = role
 	end
+	if practiceRound then
+		spawnPracticeHiders()
+	end
+	local roleSelectionDuration = if practiceRound then PRACTICE_ROLE_SELECTION_DURATION else ROLE_SELECTION_DURATION
 
 	roundState:SetAttribute("StartTimeRemaining", 0)
 	roundState:SetAttribute("TimeRemaining", 0)
-	roundState:SetAttribute("RoleSelectionDuration", ROLE_SELECTION_DURATION)
+	roundState:SetAttribute("RoleSelectionDuration", roleSelectionDuration)
 	roundState:SetAttribute("SelectionUserIds", serializeUserIds(roulettePlayers))
 	roundState:SetAttribute("SelectedSeekerUserId", (seekerPlayer :: Player).UserId)
-	roundState:SetAttribute("RoleSelectionEndTime", Workspace:GetServerTimeNow() + ROLE_SELECTION_DURATION)
+	roundState:SetAttribute("RoleSelectionEndTime", Workspace:GetServerTimeNow() + roleSelectionDuration)
 	roundState:SetAttribute("Phase", SELECTING_PHASE)
 
-	task.delay(ROLE_SELECTION_DURATION, function()
+	task.delay(roleSelectionDuration, function()
 		finishRoleSelection(thisGeneration)
 	end)
 end
@@ -329,10 +540,11 @@ scheduleAutomaticStart = function(excludedPlayer: Player?)
 
 	generation += 1
 	local thisGeneration = generation
-	local connectedPlayerCount = #getConnectedPlayers(excludedPlayer)
+	local connectedPlayers = getConnectedPlayers(excludedPlayer)
+	local connectedPlayerCount = #connectedPlayers
 	roundState:SetAttribute("ConnectedPlayers", connectedPlayerCount)
 
-	if connectedPlayerCount < MIN_PLAYERS then
+	if not canStartRound(connectedPlayers) then
 		roundState:SetAttribute("StartTimeRemaining", 0)
 		return
 	end
@@ -384,6 +596,177 @@ resetRound = function(excludedPlayer: Player?)
 	end
 end
 
+local function getTagTargetFromDescendant(descendant: Instance): TagTarget?
+	local ancestor: Instance? = descendant
+	while ancestor do
+		if ancestor:IsA("Model") then
+			local player = Players:GetPlayerFromCharacter(ancestor)
+			if player and roleAssignments[player] == HIDER_ROLE then
+				return player
+			end
+		end
+		ancestor = ancestor.Parent
+	end
+
+	for _, practiceHider in practiceHiders do
+		if descendant == practiceHider or descendant:IsDescendantOf(practiceHider) then
+			return practiceHider
+		end
+	end
+
+	return nil
+end
+
+local function isTagTargetValid(target: TagTarget): boolean
+	if target:IsA("Player") then
+		local targetPlayer = target :: Player
+		local targetCharacter = targetPlayer.Character
+		local targetHumanoid = targetCharacter and targetCharacter:FindFirstChildOfClass("Humanoid")
+		return targetPlayer.Parent == Players
+			and roleAssignments[targetPlayer] == HIDER_ROLE
+			and targetCharacter ~= nil
+			and targetHumanoid ~= nil
+			and targetHumanoid.Health > 0
+	end
+
+	local practiceHider = target :: Model
+	return practiceHider.Parent == practiceHiderFolder and table.find(practiceHiders, practiceHider) ~= nil
+end
+
+local function getTagTargetName(target: TagTarget): string
+	if target:IsA("Player") then
+		local targetPlayer = target :: Player
+		return if targetPlayer.DisplayName ~= "" then targetPlayer.DisplayName else targetPlayer.Name
+	end
+
+	return target.Name
+end
+
+local function getRemainingHiderCount(): number
+	local remainingHiders = 0
+	for _, practiceHider in practiceHiders do
+		if practiceHider.Parent == practiceHiderFolder then
+			remainingHiders += 1
+		end
+	end
+	for assignedPlayer, role in roleAssignments do
+		if role == HIDER_ROLE and assignedPlayer.Parent == Players then
+			remainingHiders += 1
+		end
+	end
+
+	return remainingHiders
+end
+
+local function eliminateTaggedHider()
+	local taggedHider = taggedHiderTarget
+	if not taggedHider or not isTagTargetValid(taggedHider) then
+		clearPendingTag()
+		return
+	end
+
+	clearPendingTag()
+	if taggedHider:IsA("Player") then
+		local taggedPlayer = taggedHider :: Player
+		roleAssignments[taggedPlayer] = SPECTATOR_ROLE
+		hiderSpawnAssignments[taggedPlayer] = nil
+		if taggedPlayer.Parent == Players then
+			taggedPlayer:SetAttribute("Role", SPECTATOR_ROLE)
+			movePlayerToAssignedSpawn(taggedPlayer)
+		end
+	else
+		local taggedPracticeHider = taggedHider :: Model
+		local practiceIndex = table.find(practiceHiders, taggedPracticeHider)
+		if practiceIndex then
+			table.remove(practiceHiders, practiceIndex)
+		end
+		taggedPracticeHider:Destroy()
+	end
+
+	if getRemainingHiderCount() == 0 then
+		resetRound(nil)
+	end
+end
+
+local function isFiniteVector3(value: Vector3): boolean
+	return value.X == value.X
+		and value.Y == value.Y
+		and value.Z == value.Z
+		and math.abs(value.X) < math.huge
+		and math.abs(value.Y) < math.huge
+		and math.abs(value.Z) < math.huge
+end
+
+local function handleTagRequest(player: Player, cameraOrigin: unknown, cameraDirection: unknown)
+	local now = os.clock()
+	local lastRequestAt = lastTagRequestAt[player] or 0
+	if now - lastRequestAt < TAG_REQUEST_COOLDOWN then
+		return
+	end
+	lastTagRequestAt[player] = now
+
+	if roundState:GetAttribute("Phase") ~= SEEKING_PHASE
+		or player ~= seekerPlayer
+		or roleAssignments[player] ~= SEEKER_ROLE
+		or taggedHiderTarget ~= nil
+		or typeof(cameraOrigin) ~= "Vector3"
+		or typeof(cameraDirection) ~= "Vector3"
+	then
+		return
+	end
+
+	local origin = cameraOrigin :: Vector3
+	local direction = cameraDirection :: Vector3
+	if not isFiniteVector3(origin) or not isFiniteVector3(direction) then
+		return
+	end
+
+	local character = player.Character
+	local head = character and character:FindFirstChild("Head")
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not character or not head or not head:IsA("BasePart") or not humanoid or humanoid.Health <= 0 then
+		return
+	end
+
+	local directionMagnitude = direction.Magnitude
+	if directionMagnitude < 0.9 or directionMagnitude > 1.1 then
+		return
+	end
+
+	if (origin - head.Position).Magnitude > MAX_CAMERA_ORIGIN_OFFSET then
+		return
+	end
+
+	local raycastParameters = RaycastParams.new()
+	raycastParameters.FilterType = Enum.RaycastFilterType.Exclude
+	raycastParameters.FilterDescendantsInstances = { character }
+	raycastParameters.IgnoreWater = false
+
+	local raycastResult = Workspace:Raycast(origin, direction.Unit * MAX_TAG_DISTANCE, raycastParameters)
+	if not raycastResult then
+		return
+	end
+
+	local target = getTagTargetFromDescendant(raycastResult.Instance)
+	if not target or not isTagTargetValid(target) then
+		return
+	end
+
+	taggedHiderTarget = target
+	target:SetAttribute("Tagged", true)
+	if target:IsA("Player") then
+		roundState:SetAttribute("TaggedHiderUserId", (target :: Player).UserId)
+	else
+		roundState:SetAttribute("TaggedHiderUserId", 0)
+	end
+	roundState:SetAttribute("TaggedHiderName", getTagTargetName(target))
+
+	local seekerRoot = character:FindFirstChild("HumanoidRootPart")
+	seekerWasAwayFromPost = seekerRoot ~= nil
+		and seekerRoot:IsA("BasePart")
+		and (seekerRoot.Position - seekerHoldingSpawn.Position).Magnitude > POST_AWAY_RADIUS
+end
+
 local function setupPlayer(player: Player)
 	if roundState:GetAttribute("Phase") == WAITING_PHASE then
 		player:SetAttribute("Role", nil)
@@ -413,6 +796,7 @@ Players.PlayerAdded:Connect(setupPlayer)
 Players.PlayerRemoving:Connect(function(player)
 	player:SetAttribute("Role", nil)
 	waitingSpawnSlots[player] = nil
+	lastTagRequestAt[player] = nil
 	local phase = roundState:GetAttribute("Phase")
 
 	if phase == WAITING_PHASE then
@@ -426,6 +810,9 @@ Players.PlayerRemoving:Connect(function(player)
 	end
 
 	local departingRole = roleAssignments[player]
+	if player == taggedHiderTarget then
+		clearPendingTag()
+	end
 	roleAssignments[player] = nil
 	hiderSpawnAssignments[player] = nil
 	updateConnectedPlayers(player)
@@ -433,16 +820,37 @@ Players.PlayerRemoving:Connect(function(player)
 	if departingRole == SEEKER_ROLE then
 		resetRound(player)
 	elseif departingRole == HIDER_ROLE then
-		local remainingHiders = 0
-		for assignedPlayer, role in roleAssignments do
-			if role == HIDER_ROLE and assignedPlayer.Parent == Players then
-				remainingHiders += 1
-			end
-		end
-
-		if remainingHiders == 0 then
+		if getRemainingHiderCount() == 0 then
 			resetRound(player)
 		end
+	end
+end)
+
+tagRequested.OnServerEvent:Connect(handleTagRequest)
+
+RunService.Heartbeat:Connect(function()
+	local taggedHider = taggedHiderTarget
+	if roundState:GetAttribute("Phase") ~= SEEKING_PHASE or not taggedHider or not seekerPlayer then
+		return
+	end
+
+	if not isTagTargetValid(taggedHider) then
+		clearPendingTag()
+		return
+	end
+
+	local seekerCharacter = seekerPlayer.Character
+	local seekerRoot = seekerCharacter and seekerCharacter:FindFirstChild("HumanoidRootPart")
+	local seekerHumanoid = seekerCharacter and seekerCharacter:FindFirstChildOfClass("Humanoid")
+	if not seekerRoot or not seekerRoot:IsA("BasePart") or not seekerHumanoid or seekerHumanoid.Health <= 0 then
+		return
+	end
+
+	local distanceFromPost = (seekerRoot.Position - seekerHoldingSpawn.Position).Magnitude
+	if distanceFromPost > POST_AWAY_RADIUS then
+		seekerWasAwayFromPost = true
+	elseif seekerWasAwayFromPost and distanceFromPost <= POST_CAPTURE_RADIUS then
+		eliminateTaggedHider()
 	end
 end)
 
@@ -462,6 +870,9 @@ roundState:SetAttribute("RoleSelectionDuration", ROLE_SELECTION_DURATION)
 roundState:SetAttribute("RoleSelectionEndTime", 0)
 roundState:SetAttribute("SelectionUserIds", "")
 roundState:SetAttribute("SelectedSeekerUserId", 0)
+roundState:SetAttribute("TaggedHiderUserId", 0)
+roundState:SetAttribute("TaggedHiderName", "")
+roundState:SetAttribute("PracticeModeActive", false)
 for _, player in Players:GetPlayers() do
 	setupPlayer(player)
 end
