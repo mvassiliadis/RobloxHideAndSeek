@@ -1,6 +1,7 @@
 --!strict
 
 local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
@@ -28,9 +29,18 @@ local MAX_CAMERA_ORIGIN_OFFSET = 8
 local TAG_REQUEST_COOLDOWN = 0.15
 local POST_CAPTURE_RADIUS = 8
 local POST_AWAY_RADIUS = 12
+local ROUND_COMPLETE_DELAY = 2
 
 type Role = "Seeker" | "Hider" | "Spectator"
 type TagTarget = Player | Model
+type HiderStatus = "Active" | "Tagged" | "Eliminated"
+type HiderRosterEntry = {
+	id: string,
+	userId: number,
+	name: string,
+	status: HiderStatus,
+	isPractice: boolean,
+}
 
 local roundState = ReplicatedStorage:WaitForChild("RoundState")
 local resetRequested = roundState:WaitForChild("ResetRequested") :: RemoteEvent
@@ -95,20 +105,43 @@ local waitingSpawnSlots: { [Player]: number } = {}
 local seekerPlayer: Player? = nil
 local practiceHiders: { Model } = {}
 local practiceHiderFolder: Folder? = nil
-local taggedHiderTarget: TagTarget? = nil
+local taggedHiderTargets: { TagTarget } = {}
+local taggedHiderSet: { [Instance]: boolean } = {}
+local hiderRoster: { [string]: HiderRosterEntry } = {}
+local hiderRosterOrder: { string } = {}
+local hiderRosterKeyByTarget: { [Instance]: string } = {}
 local seekerWasAwayFromPost = false
 local lastTagRequestAt: { [Player]: number } = {}
 
-local function clearPendingTag()
-	local taggedHider = taggedHiderTarget
-	if taggedHider and taggedHider.Parent then
-		taggedHider:SetAttribute("Tagged", nil)
+local function replicateHiderRoster()
+	local serializedRoster: { HiderRosterEntry } = {}
+	for _, rosterKey in hiderRosterOrder do
+		local entry = hiderRoster[rosterKey]
+		if entry then
+			table.insert(serializedRoster, entry)
+		end
 	end
 
-	taggedHiderTarget = nil
+	roundState:SetAttribute("HiderRosterJson", HttpService:JSONEncode(serializedRoster))
+end
+
+local function clearPendingTags()
+	for _, taggedHider in taggedHiderTargets do
+		if taggedHider.Parent then
+			taggedHider:SetAttribute("Tagged", nil)
+		end
+	end
+
+	table.clear(taggedHiderTargets)
+	table.clear(taggedHiderSet)
 	seekerWasAwayFromPost = false
-	roundState:SetAttribute("TaggedHiderUserId", 0)
-	roundState:SetAttribute("TaggedHiderName", "")
+end
+
+local function clearHiderRoster()
+	table.clear(hiderRoster)
+	table.clear(hiderRosterOrder)
+	table.clear(hiderRosterKeyByTarget)
+	roundState:SetAttribute("HiderRosterJson", "[]")
 end
 
 local function clearPracticeHiders()
@@ -167,6 +200,43 @@ local function shuffledCopy<T>(items: { T }): { T }
 	end
 
 	return shuffled
+end
+
+local function registerHiderTarget(target: TagTarget)
+	local rosterKey: string
+	local userId = 0
+	local displayName: string
+	local isPractice = not target:IsA("Player")
+
+	if target:IsA("Player") then
+		local targetPlayer = target :: Player
+		rosterKey = `player:{targetPlayer.UserId}`
+		userId = targetPlayer.UserId
+		displayName = if targetPlayer.DisplayName ~= "" then targetPlayer.DisplayName else targetPlayer.Name
+	else
+		local practiceHider = target :: Model
+		local practiceIndex = practiceHider:GetAttribute("PracticeIndex")
+		rosterKey = `practice:{tostring(practiceIndex)}`
+		displayName = practiceHider.Name
+	end
+
+	hiderRoster[rosterKey] = {
+		id = rosterKey,
+		userId = userId,
+		name = displayName,
+		status = "Active",
+		isPractice = isPractice,
+	}
+	table.insert(hiderRosterOrder, rosterKey)
+	hiderRosterKeyByTarget[target] = rosterKey
+end
+
+local function setHiderStatus(target: TagTarget, status: HiderStatus)
+	local rosterKey = hiderRosterKeyByTarget[target]
+	local entry = rosterKey and hiderRoster[rosterKey]
+	if entry then
+		entry.status = status
+	end
 end
 
 local function createPracticeBodyPart(
@@ -297,7 +367,9 @@ local function spawnPracticeHiders()
 
 	local shuffledMarkers = shuffledCopy(hiderSpawns)
 	for index = 1, getPracticeHiderCount() do
-		table.insert(practiceHiders, createPracticeHider(index, shuffledMarkers[index], folder))
+		local practiceHider = createPracticeHider(index, shuffledMarkers[index], folder)
+		table.insert(practiceHiders, practiceHider)
+		registerHiderTarget(practiceHider)
 	end
 
 	roundState:SetAttribute("PracticeModeActive", true)
@@ -330,8 +402,9 @@ local function updateConnectedPlayers(excludedPlayer: Player?)
 end
 
 local function clearAssignments()
-	clearPendingTag()
+	clearPendingTags()
 	clearPracticeHiders()
+	clearHiderRoster()
 
 	if seekerPlayer then
 		local character = seekerPlayer.Character
@@ -425,7 +498,7 @@ local function positionCharacterWhenReady(player: Player, character: Model)
 	pivotCharacterToAssignedSpawn(player, character)
 	setCharacterLocked(character, shouldLockPlayer(player))
 
-	if player == seekerPlayer and taggedHiderTarget then
+	if player == seekerPlayer and #taggedHiderTargets > 0 then
 		-- Respawning at the post must not count as returning with a tagged hider.
 		seekerWasAwayFromPost = false
 	end
@@ -513,10 +586,14 @@ local function beginRoleSelection(thisGeneration: number)
 		end
 
 		roleAssignments[player] = role
+		if role == HIDER_ROLE then
+			registerHiderTarget(player)
+		end
 	end
 	if practiceRound then
 		spawnPracticeHiders()
 	end
+	replicateHiderRoster()
 	local roleSelectionDuration = if practiceRound then PRACTICE_ROLE_SELECTION_DURATION else ROLE_SELECTION_DURATION
 
 	roundState:SetAttribute("StartTimeRemaining", 0)
@@ -633,15 +710,6 @@ local function isTagTargetValid(target: TagTarget): boolean
 	return practiceHider.Parent == practiceHiderFolder and table.find(practiceHiders, practiceHider) ~= nil
 end
 
-local function getTagTargetName(target: TagTarget): string
-	if target:IsA("Player") then
-		local targetPlayer = target :: Player
-		return if targetPlayer.DisplayName ~= "" then targetPlayer.DisplayName else targetPlayer.Name
-	end
-
-	return target.Name
-end
-
 local function getRemainingHiderCount(): number
 	local remainingHiders = 0
 	for _, practiceHider in practiceHiders do
@@ -658,33 +726,97 @@ local function getRemainingHiderCount(): number
 	return remainingHiders
 end
 
-local function eliminateTaggedHider()
-	local taggedHider = taggedHiderTarget
-	if not taggedHider or not isTagTargetValid(taggedHider) then
-		clearPendingTag()
-		return
+local function removeTaggedHider(target: TagTarget): boolean
+	if not taggedHiderSet[target] then
+		return false
 	end
 
-	clearPendingTag()
-	if taggedHider:IsA("Player") then
-		local taggedPlayer = taggedHider :: Player
-		roleAssignments[taggedPlayer] = SPECTATOR_ROLE
-		hiderSpawnAssignments[taggedPlayer] = nil
-		if taggedPlayer.Parent == Players then
-			taggedPlayer:SetAttribute("Role", SPECTATOR_ROLE)
-			movePlayerToAssignedSpawn(taggedPlayer)
-		end
-	else
-		local taggedPracticeHider = taggedHider :: Model
-		local practiceIndex = table.find(practiceHiders, taggedPracticeHider)
-		if practiceIndex then
-			table.remove(practiceHiders, practiceIndex)
-		end
-		taggedPracticeHider:Destroy()
+	taggedHiderSet[target] = nil
+	local taggedIndex = table.find(taggedHiderTargets, target)
+	if taggedIndex then
+		table.remove(taggedHiderTargets, taggedIndex)
 	end
+	if target.Parent then
+		target:SetAttribute("Tagged", nil)
+	end
+
+	if #taggedHiderTargets == 0 then
+		seekerWasAwayFromPost = false
+	end
+
+	return true
+end
+
+local function pruneInvalidTaggedHiders()
+	local rosterChanged = false
+	for index = #taggedHiderTargets, 1, -1 do
+		local target = taggedHiderTargets[index]
+		if not isTagTargetValid(target) then
+			taggedHiderSet[target] = nil
+			table.remove(taggedHiderTargets, index)
+			if target.Parent then
+				target:SetAttribute("Tagged", nil)
+			end
+
+			if target:IsA("Player") then
+				local targetPlayer = target :: Player
+				if targetPlayer.Parent == Players and roleAssignments[targetPlayer] == HIDER_ROLE then
+					setHiderStatus(targetPlayer, "Active")
+				else
+					setHiderStatus(targetPlayer, "Eliminated")
+				end
+			else
+				setHiderStatus(target, "Eliminated")
+			end
+			rosterChanged = true
+		end
+	end
+
+	if #taggedHiderTargets == 0 then
+		seekerWasAwayFromPost = false
+	end
+	if rosterChanged then
+		replicateHiderRoster()
+	end
+end
+
+local function eliminateTaggedHiders()
+	local targetsToEliminate = table.clone(taggedHiderTargets)
+	clearPendingTags()
+
+	for _, taggedHider in targetsToEliminate do
+		if isTagTargetValid(taggedHider) then
+			setHiderStatus(taggedHider, "Eliminated")
+			if taggedHider:IsA("Player") then
+				local taggedPlayer = taggedHider :: Player
+				roleAssignments[taggedPlayer] = SPECTATOR_ROLE
+				hiderSpawnAssignments[taggedPlayer] = nil
+				if taggedPlayer.Parent == Players then
+					taggedPlayer:SetAttribute("Role", SPECTATOR_ROLE)
+					movePlayerToAssignedSpawn(taggedPlayer)
+				end
+			else
+				local taggedPracticeHider = taggedHider :: Model
+				local practiceIndex = table.find(practiceHiders, taggedPracticeHider)
+				if practiceIndex then
+					table.remove(practiceHiders, practiceIndex)
+				end
+				taggedPracticeHider:Destroy()
+			end
+		end
+	end
+	replicateHiderRoster()
 
 	if getRemainingHiderCount() == 0 then
-		resetRound(nil)
+		local thisGeneration = generation
+		task.delay(ROUND_COMPLETE_DELAY, function()
+			if thisGeneration == generation
+				and roundState:GetAttribute("Phase") == SEEKING_PHASE
+				and getRemainingHiderCount() == 0
+			then
+				resetRound(nil)
+			end
+		end)
 	end
 end
 
@@ -708,7 +840,6 @@ local function handleTagRequest(player: Player, cameraOrigin: unknown, cameraDir
 	if roundState:GetAttribute("Phase") ~= SEEKING_PHASE
 		or player ~= seekerPlayer
 		or roleAssignments[player] ~= SEEKER_ROLE
-		or taggedHiderTarget ~= nil
 		or typeof(cameraOrigin) ~= "Vector3"
 		or typeof(cameraDirection) ~= "Vector3"
 	then
@@ -748,23 +879,23 @@ local function handleTagRequest(player: Player, cameraOrigin: unknown, cameraDir
 	end
 
 	local target = getTagTargetFromDescendant(raycastResult.Instance)
-	if not target or not isTagTargetValid(target) then
+	if not target or not isTagTargetValid(target) or taggedHiderSet[target] then
 		return
 	end
 
-	taggedHiderTarget = target
+	local firstPendingTag = #taggedHiderTargets == 0
+	taggedHiderSet[target] = true
+	table.insert(taggedHiderTargets, target)
 	target:SetAttribute("Tagged", true)
-	if target:IsA("Player") then
-		roundState:SetAttribute("TaggedHiderUserId", (target :: Player).UserId)
-	else
-		roundState:SetAttribute("TaggedHiderUserId", 0)
-	end
-	roundState:SetAttribute("TaggedHiderName", getTagTargetName(target))
+	setHiderStatus(target, "Tagged")
+	replicateHiderRoster()
 
-	local seekerRoot = character:FindFirstChild("HumanoidRootPart")
-	seekerWasAwayFromPost = seekerRoot ~= nil
-		and seekerRoot:IsA("BasePart")
-		and (seekerRoot.Position - seekerHoldingSpawn.Position).Magnitude > POST_AWAY_RADIUS
+	if firstPendingTag then
+		local seekerRoot = character:FindFirstChild("HumanoidRootPart")
+		seekerWasAwayFromPost = seekerRoot ~= nil
+			and seekerRoot:IsA("BasePart")
+			and (seekerRoot.Position - seekerHoldingSpawn.Position).Magnitude > POST_AWAY_RADIUS
+	end
 end
 
 local function setupPlayer(player: Player)
@@ -810,8 +941,12 @@ Players.PlayerRemoving:Connect(function(player)
 	end
 
 	local departingRole = roleAssignments[player]
-	if player == taggedHiderTarget then
-		clearPendingTag()
+	if taggedHiderSet[player] then
+		removeTaggedHider(player)
+	end
+	if departingRole == HIDER_ROLE then
+		setHiderStatus(player, "Eliminated")
+		replicateHiderRoster()
 	end
 	roleAssignments[player] = nil
 	hiderSpawnAssignments[player] = nil
@@ -829,13 +964,12 @@ end)
 tagRequested.OnServerEvent:Connect(handleTagRequest)
 
 RunService.Heartbeat:Connect(function()
-	local taggedHider = taggedHiderTarget
-	if roundState:GetAttribute("Phase") ~= SEEKING_PHASE or not taggedHider or not seekerPlayer then
+	if roundState:GetAttribute("Phase") ~= SEEKING_PHASE or #taggedHiderTargets == 0 or not seekerPlayer then
 		return
 	end
 
-	if not isTagTargetValid(taggedHider) then
-		clearPendingTag()
+	pruneInvalidTaggedHiders()
+	if #taggedHiderTargets == 0 then
 		return
 	end
 
@@ -850,7 +984,7 @@ RunService.Heartbeat:Connect(function()
 	if distanceFromPost > POST_AWAY_RADIUS then
 		seekerWasAwayFromPost = true
 	elseif seekerWasAwayFromPost and distanceFromPost <= POST_CAPTURE_RADIUS then
-		eliminateTaggedHider()
+		eliminateTaggedHiders()
 	end
 end)
 
@@ -870,8 +1004,7 @@ roundState:SetAttribute("RoleSelectionDuration", ROLE_SELECTION_DURATION)
 roundState:SetAttribute("RoleSelectionEndTime", 0)
 roundState:SetAttribute("SelectionUserIds", "")
 roundState:SetAttribute("SelectedSeekerUserId", 0)
-roundState:SetAttribute("TaggedHiderUserId", 0)
-roundState:SetAttribute("TaggedHiderName", "")
+roundState:SetAttribute("HiderRosterJson", "[]")
 roundState:SetAttribute("PracticeModeActive", false)
 for _, player in Players:GetPlayers() do
 	setupPlayer(player)

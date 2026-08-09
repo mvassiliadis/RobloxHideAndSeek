@@ -1,6 +1,7 @@
 --!strict
 
 local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
@@ -27,10 +28,22 @@ local DEFAULT_GUIDE_COLOR = Color3.fromRGB(222, 230, 241)
 local CURSOR_GUIDE_COLOR = Color3.fromRGB(255, 220, 130)
 local SELECTION_ACCENT_COLOR = Color3.fromRGB(255, 196, 74)
 local SELECTION_DIM_COLOR = Color3.fromRGB(82, 91, 110)
+local ACTIVE_HIDER_COLOR = Color3.fromRGB(92, 190, 255)
+local TAGGED_HIDER_COLOR = Color3.fromRGB(255, 178, 75)
+local ELIMINATED_HIDER_COLOR = Color3.fromRGB(143, 152, 168)
 
 local DEFAULT_GUIDE_TEXT = "WASD  MOVE   •   MOUSE  LOOK\nHOLD ALT  CURSOR   •   HOLD R  RESET"
 local CURSOR_GUIDE_TEXT = "CURSOR ACTIVE\nRELEASE ALT TO LOOK"
 local R_HOLD_SECONDS = 1
+
+type HiderStatus = "Active" | "Tagged" | "Eliminated"
+type HiderRosterItem = {
+	id: string,
+	userId: number,
+	name: string,
+	status: HiderStatus,
+	isPractice: boolean,
+}
 
 local GOTHAM_BOLD = Font.new(
 	"rbxasset://fonts/families/GothamSSm.json",
@@ -64,6 +77,39 @@ local function parseUserIds(serializedUserIds: unknown): { number }
 	return userIds
 end
 
+local function parseHiderRoster(serializedRoster: unknown): { HiderRosterItem }
+	if typeof(serializedRoster) ~= "string" or serializedRoster == "" then
+		return {}
+	end
+
+	local success, decoded = pcall(function(): any
+		return HttpService:JSONDecode(serializedRoster)
+	end)
+	if not success or typeof(decoded) ~= "table" then
+		return {}
+	end
+
+	local roster: { HiderRosterItem } = {}
+	for _, rawEntry in decoded :: { any } do
+		if typeof(rawEntry) == "table"
+			and typeof(rawEntry.id) == "string"
+			and typeof(rawEntry.userId) == "number"
+			and typeof(rawEntry.name) == "string"
+			and (rawEntry.status == "Active" or rawEntry.status == "Tagged" or rawEntry.status == "Eliminated")
+		then
+			table.insert(roster, {
+				id = rawEntry.id,
+				userId = rawEntry.userId,
+				name = rawEntry.name,
+				status = rawEntry.status,
+				isPractice = rawEntry.isPractice == true,
+			})
+		end
+	end
+
+	return roster
+end
+
 local function RoundApp()
 	local phase, setPhase = React.useState(roundState:GetAttribute("Phase"))
 	local timeRemaining, setTimeRemaining = React.useState(roundState:GetAttribute("TimeRemaining"))
@@ -73,8 +119,7 @@ local function RoundApp()
 	local selectedSeekerUserId, setSelectedSeekerUserId = React.useState(roundState:GetAttribute("SelectedSeekerUserId"))
 	local roleSelectionDuration, setRoleSelectionDuration = React.useState(roundState:GetAttribute("RoleSelectionDuration"))
 	local roleSelectionEndTime, setRoleSelectionEndTime = React.useState(roundState:GetAttribute("RoleSelectionEndTime"))
-	local taggedHiderUserId, setTaggedHiderUserId = React.useState(roundState:GetAttribute("TaggedHiderUserId"))
-	local taggedHiderName, setTaggedHiderName = React.useState(roundState:GetAttribute("TaggedHiderName"))
+	local hiderRosterJson, setHiderRosterJson = React.useState(roundState:GetAttribute("HiderRosterJson"))
 	local practiceModeActive, setPracticeModeActive = React.useState(roundState:GetAttribute("PracticeModeActive"))
 	local selectionIndex, setSelectionIndex = React.useState(1)
 	local role, setRole = React.useState(localPlayer:GetAttribute("Role"))
@@ -227,11 +272,8 @@ local function RoundApp()
 			roundState:GetAttributeChangedSignal("RoleSelectionEndTime"):Connect(function()
 				setRoleSelectionEndTime(roundState:GetAttribute("RoleSelectionEndTime"))
 			end),
-			roundState:GetAttributeChangedSignal("TaggedHiderUserId"):Connect(function()
-				setTaggedHiderUserId(roundState:GetAttribute("TaggedHiderUserId"))
-			end),
-			roundState:GetAttributeChangedSignal("TaggedHiderName"):Connect(function()
-				setTaggedHiderName(roundState:GetAttribute("TaggedHiderName"))
+			roundState:GetAttributeChangedSignal("HiderRosterJson"):Connect(function()
+				setHiderRosterJson(roundState:GetAttribute("HiderRosterJson"))
 			end),
 			roundState:GetAttributeChangedSignal("PracticeModeActive"):Connect(function()
 				setPracticeModeActive(roundState:GetAttribute("PracticeModeActive"))
@@ -307,8 +349,23 @@ local function RoundApp()
 	local numericSelectedSeekerUserId = if typeof(selectedSeekerUserId) == "number" then selectedSeekerUserId else 0
 	local numericRoleSelectionDuration = if typeof(roleSelectionDuration) == "number" then roleSelectionDuration else 5
 	local numericRoleSelectionEndTime = if typeof(roleSelectionEndTime) == "number" then roleSelectionEndTime else 0
-	local numericTaggedHiderUserId = if typeof(taggedHiderUserId) == "number" then taggedHiderUserId else 0
-	local currentTaggedHiderName = if typeof(taggedHiderName) == "string" then taggedHiderName else ""
+	local hiderRoster = parseHiderRoster(hiderRosterJson)
+	local activeHiders: { HiderRosterItem } = {}
+	local taggedHiders: { HiderRosterItem } = {}
+	local eliminatedHiders: { HiderRosterItem } = {}
+	local localPlayerIsTagged = false
+	for _, hider in hiderRoster do
+		if hider.status == "Active" then
+			table.insert(activeHiders, hider)
+		elseif hider.status == "Tagged" then
+			table.insert(taggedHiders, hider)
+			if hider.userId == localPlayer.UserId then
+				localPlayerIsTagged = true
+			end
+		else
+			table.insert(eliminatedHiders, hider)
+		end
+	end
 	local selectionCandidates = parseUserIds(selectionUserIds)
 	local waiting = phase == "WaitingToStart"
 	local starting = waiting and numericStartTimeRemaining > 0
@@ -320,9 +377,10 @@ local function RoundApp()
 	local seeking = phase == "Seeking"
 	local timerVisible = phase == "Hiding"
 	local timerWarning = timerVisible and numericTimeRemaining <= 5 and numericTimeRemaining > 0
-	local hasPendingTag = currentTaggedHiderName ~= ""
-	local localPlayerIsTagged = numericTaggedHiderUserId ~= 0 and numericTaggedHiderUserId == localPlayer.UserId
-	local taggedHiderDisplayName = if hasPendingTag then string.upper(currentTaggedHiderName) else "HIDER"
+	local taggedHiderCount = #taggedHiders
+	local hasPendingTags = taggedHiderCount > 0
+	local taggedHiderNoun = if taggedHiderCount == 1 then "HIDER" else "HIDERS"
+	local allHidersEliminated = #hiderRoster > 0 and #activeHiders == 0 and taggedHiderCount == 0
 
 	React.useEffect(function()
 		if not selecting or #selectionCandidates == 0 then
@@ -392,8 +450,10 @@ local function RoundApp()
 		then "CHOOSING THE SEEKER"
 		elseif seeking
 		then if role == "Seeker"
-			then if hasPendingTag
-				then `RETURN TO THE SEEKER POST\nTO ELIMINATE {taggedHiderDisplayName}`
+			then if hasPendingTags
+				then `{taggedHiderCount} {taggedHiderNoun} TAGGED\nKEEP LOOKING OR RETURN TO THE POST`
+				elseif allHidersEliminated
+				then "ALL HIDERS ELIMINATED!"
 				else "FIND A HIDER\nAIM AND CLICK TO TAG"
 			elseif role == "Hider"
 			then if localPlayerIsTagged
@@ -427,8 +487,8 @@ local function RoundApp()
 	local compactSelectionCards = UserInputService.TouchEnabled
 	local controlsGuideText = if cursorActive
 		then CURSOR_GUIDE_TEXT
-		elseif seeking and role == "Seeker" and hasPendingTag
-		then "WASD  MOVE   •   MOUSE  LOOK\nRETURN TO THE SEEKER POST"
+		elseif seeking and role == "Seeker" and hasPendingTags
+		then "LEFT CLICK  TAG MORE HIDERS\nRETURN TO POST  ELIMINATE ALL"
 		elseif seeking and role == "Seeker"
 		then "WASD  MOVE   •   MOUSE  LOOK\nLEFT CLICK  TAG A VISIBLE HIDER"
 		else DEFAULT_GUIDE_TEXT
@@ -539,6 +599,155 @@ local function RoundApp()
 		})
 	end
 
+	local compactRoster = UserInputService.TouchEnabled
+	local rosterRowHeight = if compactRoster then 30 else 36
+	local rosterWidth = if compactRoster then 198 else 244
+	local function createRosterSection(
+		sectionName: string,
+		sectionColor: Color3,
+		sectionItems: { HiderRosterItem },
+		layoutOrder: number
+	)
+		local visibleRowCount = math.max(1, #sectionItems)
+		local sectionHeight = 25 + visibleRowCount * rosterRowHeight
+		local sectionChildren: { [string]: any } = {
+			Header = e("TextLabel", {
+				BackgroundColor3 = sectionColor,
+				BackgroundTransparency = 0.82,
+				BorderSizePixel = 0,
+				FontFace = GOTHAM_BOLD,
+				Position = UDim2.fromOffset(0, 0),
+				Size = UDim2.new(1, 0, 0, 21),
+				Text = `{string.upper(sectionName)}  {#sectionItems}`,
+				TextColor3 = sectionColor,
+				TextSize = if compactRoster then 11 else 12,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				ZIndex = 5,
+			}, {
+				Corner = e("UICorner", {
+					CornerRadius = UDim.new(0, 6),
+				}),
+				Padding = e("UIPadding", {
+					PaddingLeft = UDim.new(0, 8),
+				}),
+			}),
+		}
+
+		if #sectionItems == 0 then
+			sectionChildren.Empty = e("TextLabel", {
+				BackgroundTransparency = 1,
+				FontFace = GOTHAM_MEDIUM,
+				Position = UDim2.fromOffset(8, 25),
+				Size = UDim2.new(1, -16, 0, rosterRowHeight),
+				Text = "None",
+				TextColor3 = Color3.fromRGB(137, 148, 165),
+				TextSize = if compactRoster then 11 else 12,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				ZIndex = 5,
+			})
+		else
+			for index, hider in sectionItems do
+				local initials = if hider.isPractice
+					then "BOT"
+					else string.upper(string.sub(hider.name, 1, 1))
+				local rowY = 25 + (index - 1) * rosterRowHeight
+				sectionChildren[hider.id] = e("Frame", {
+					BackgroundColor3 = Color3.fromRGB(25, 34, 49),
+					BackgroundTransparency = 0.18,
+					BorderSizePixel = 0,
+					Position = UDim2.fromOffset(0, rowY),
+					Size = UDim2.new(1, 0, 0, rosterRowHeight - 3),
+					ZIndex = 5,
+				}, {
+					Corner = e("UICorner", {
+						CornerRadius = UDim.new(0, 7),
+					}),
+					StatusBar = e("Frame", {
+						BackgroundColor3 = sectionColor,
+						BorderSizePixel = 0,
+						Size = UDim2.new(0, 3, 1, 0),
+						ZIndex = 6,
+					}, {
+						Corner = e("UICorner", {
+							CornerRadius = UDim.new(0, 7),
+						}),
+					}),
+					AvatarFallback = e("TextLabel", {
+						AnchorPoint = Vector2.new(0, 0.5),
+						BackgroundColor3 = sectionColor,
+						BackgroundTransparency = 0.72,
+						BorderSizePixel = 0,
+						FontFace = GOTHAM_BOLD,
+						Position = UDim2.new(0, 9, 0.5, 0),
+						Size = UDim2.fromOffset(rosterRowHeight - 10, rosterRowHeight - 10),
+						Text = initials,
+						TextColor3 = sectionColor,
+						TextScaled = true,
+						ZIndex = 6,
+					}, {
+						Corner = e("UICorner", {
+							CornerRadius = UDim.new(1, 0),
+						}),
+						TextConstraint = e("UITextSizeConstraint", {
+							MaxTextSize = if compactRoster then 9 else 11,
+							MinTextSize = 7,
+						}),
+					}),
+					Avatar = e("ImageLabel", {
+						AnchorPoint = Vector2.new(0, 0.5),
+						BackgroundTransparency = 1,
+						BorderSizePixel = 0,
+						Image = if hider.userId > 0
+							then `rbxthumb://type=AvatarHeadShot&id={hider.userId}&w=100&h=100`
+							else "",
+						ImageTransparency = if sectionName == "Eliminated" then 0.45 else 0,
+						Position = UDim2.new(0, 9, 0.5, 0),
+						Size = UDim2.fromOffset(rosterRowHeight - 10, rosterRowHeight - 10),
+						ZIndex = 7,
+					}, {
+						Corner = e("UICorner", {
+							CornerRadius = UDim.new(1, 0),
+						}),
+					}),
+					Name = e("TextLabel", {
+						BackgroundTransparency = 1,
+						FontFace = GOTHAM_MEDIUM,
+						Position = UDim2.new(0, rosterRowHeight + 5, 0, 0),
+						Size = UDim2.new(1, -(rosterRowHeight + 13), 1, 0),
+						Text = if hider.userId == localPlayer.UserId then `{hider.name} (YOU)` else hider.name,
+						TextColor3 = if sectionName == "Eliminated"
+							then Color3.fromRGB(154, 162, 175)
+							else Color3.fromRGB(232, 237, 245),
+						TextSize = if compactRoster then 11 else 13,
+						TextTruncate = Enum.TextTruncate.AtEnd,
+						TextXAlignment = Enum.TextXAlignment.Left,
+						ZIndex = 6,
+					}),
+				})
+			end
+		end
+
+		return e("Frame", {
+			BackgroundTransparency = 1,
+			LayoutOrder = layoutOrder,
+			Size = UDim2.new(1, 0, 0, sectionHeight),
+		}, sectionChildren)
+	end
+
+	local activeSectionHeight = 25 + math.max(1, #activeHiders) * rosterRowHeight
+	local taggedSectionHeight = 25 + math.max(1, #taggedHiders) * rosterRowHeight
+	local eliminatedSectionHeight = 25 + math.max(1, #eliminatedHiders) * rosterRowHeight
+	local rosterPanelHeight = 52 + activeSectionHeight + taggedSectionHeight + eliminatedSectionHeight + 12
+	local rosterSections = {
+		Layout = e("UIListLayout", {
+			Padding = UDim.new(0, 6),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+		}),
+		Active = createRosterSection("Active", ACTIVE_HIDER_COLOR, activeHiders, 1),
+		Tagged = createRosterSection("Tagged", TAGGED_HIDER_COLOR, taggedHiders, 2),
+		Eliminated = createRosterSection("Eliminated", ELIMINATED_HIDER_COLOR, eliminatedHiders, 3),
+	}
+
 	return e(React.Fragment, nil, {
 		PhaseLabel = e("TextLabel", {
 			AnchorPoint = Vector2.new(0.5, 0),
@@ -571,35 +780,35 @@ local function RoundApp()
 		}, {
 			Top = e("Frame", {
 				AnchorPoint = Vector2.new(0.5, 1),
-				BackgroundColor3 = if hasPendingTag then SEEKING_COLOR else Color3.new(1, 1, 1),
+				BackgroundColor3 = if hasPendingTags then SEEKING_COLOR else Color3.new(1, 1, 1),
 				BorderSizePixel = 0,
 				Position = UDim2.new(0.5, 0, 0.5, -4),
 				Size = UDim2.fromOffset(2, 8),
 			}),
 			Bottom = e("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0),
-				BackgroundColor3 = if hasPendingTag then SEEKING_COLOR else Color3.new(1, 1, 1),
+				BackgroundColor3 = if hasPendingTags then SEEKING_COLOR else Color3.new(1, 1, 1),
 				BorderSizePixel = 0,
 				Position = UDim2.new(0.5, 0, 0.5, 4),
 				Size = UDim2.fromOffset(2, 8),
 			}),
 			Left = e("Frame", {
 				AnchorPoint = Vector2.new(1, 0.5),
-				BackgroundColor3 = if hasPendingTag then SEEKING_COLOR else Color3.new(1, 1, 1),
+				BackgroundColor3 = if hasPendingTags then SEEKING_COLOR else Color3.new(1, 1, 1),
 				BorderSizePixel = 0,
 				Position = UDim2.new(0.5, -4, 0.5, 0),
 				Size = UDim2.fromOffset(8, 2),
 			}),
 			Right = e("Frame", {
 				AnchorPoint = Vector2.new(0, 0.5),
-				BackgroundColor3 = if hasPendingTag then SEEKING_COLOR else Color3.new(1, 1, 1),
+				BackgroundColor3 = if hasPendingTags then SEEKING_COLOR else Color3.new(1, 1, 1),
 				BorderSizePixel = 0,
 				Position = UDim2.new(0.5, 4, 0.5, 0),
 				Size = UDim2.fromOffset(8, 2),
 			}),
 			Dot = e("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				BackgroundColor3 = if hasPendingTag then SEEKING_COLOR else Color3.new(1, 1, 1),
+				BackgroundColor3 = if hasPendingTags then SEEKING_COLOR else Color3.new(1, 1, 1),
 				BorderSizePixel = 0,
 				Position = UDim2.fromScale(0.5, 0.5),
 				Size = UDim2.fromOffset(4, 4),
@@ -793,6 +1002,60 @@ local function RoundApp()
 				Thickness = 1,
 				Transparency = 0.45,
 			}),
+		}),
+
+		HiderRosterPanel = e("Frame", {
+			AnchorPoint = Vector2.new(1, 0),
+			BackgroundColor3 = Color3.fromRGB(13, 20, 31),
+			BackgroundTransparency = 0.12,
+			BorderSizePixel = 0,
+			Position = UDim2.new(1, if compactRoster then -10 else -20, 0, 112),
+			Size = UDim2.fromOffset(rosterWidth, rosterPanelHeight),
+			Visible = (phase == "Hiding" or seeking) and #hiderRoster > 0,
+			ZIndex = 4,
+		}, {
+			Corner = e("UICorner", {
+				CornerRadius = UDim.new(0, 12),
+			}),
+			Stroke = e("UIStroke", {
+				Color = Color3.fromRGB(91, 108, 134),
+				Thickness = 1.25,
+				Transparency = 0.38,
+			}),
+			Title = e("TextLabel", {
+				BackgroundTransparency = 1,
+				FontFace = GOTHAM_HEAVY,
+				Position = UDim2.fromOffset(12, 8),
+				Size = UDim2.new(1, -58, 0, 28),
+				Text = "HIDER ROSTER",
+				TextColor3 = Color3.fromRGB(236, 241, 249),
+				TextSize = if compactRoster then 14 else 16,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				ZIndex = 5,
+			}),
+			Total = e("TextLabel", {
+				AnchorPoint = Vector2.new(1, 0),
+				BackgroundColor3 = Color3.fromRGB(45, 58, 78),
+				BackgroundTransparency = 0.18,
+				BorderSizePixel = 0,
+				FontFace = GOTHAM_BOLD,
+				Position = UDim2.new(1, -10, 0, 10),
+				Size = UDim2.fromOffset(28, 24),
+				Text = tostring(#hiderRoster),
+				TextColor3 = Color3.fromRGB(216, 225, 239),
+				TextSize = 12,
+				ZIndex = 5,
+			}, {
+				Corner = e("UICorner", {
+					CornerRadius = UDim.new(1, 0),
+				}),
+			}),
+			Sections = e("Frame", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(10, 42),
+				Size = UDim2.new(1, -20, 1, -50),
+				ZIndex = 5,
+			}, rosterSections),
 		}),
 
 		ControlsGuide = e("TextLabel", {
