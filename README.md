@@ -108,17 +108,17 @@ WaitingToStart -> SelectingRoles -> Hiding -> Seeking
 
 ### 4. Seeking
 
-- The seeker gets a center-screen crosshair and can point at a visible hider and left-click to tag them.
+- The seeker gets a center-screen crosshair and can point at a visible hider and left-click to tag them. On touch devices, the seeker can either aim with the crosshair and press the on-screen **TAG** button or tap a visible hider directly.
 - Every active hider receives a server-generated, invisible, non-colliding full-body tag volume, so limbs, gaps in an avatar rig, and cosmetic geometry do not reduce the reliable target silhouette. It is removed when the player stops being an active hider and is never baked into the map.
 - The server first raycasts the exact submitted aim against that volume, then uses a configurable 1.5-stud-radius spherecast only when the center ray misses. A final thin line-of-sight check, 300-stud maximum range, and living-hider validation keep the forgiving tag from reaching through walls or around corners.
 - The seeker can tag any number of currently active hiders before returning to the post. Tagged hiders remain active in the world until the tags are banked.
-- Each tagged real hider can race the seeker back to `SeekerHoldingSpawn`. A hider who enters the 8-stud capture radius after being outside the 12-stud outer radius becomes a round winner, is promoted to spectator, and moves to a waiting-area slot. Untagged hiders cannot win by entering the post.
-- If the seeker reaches the post first, every hider whose tag is still pending is eliminated at once. The same outside-then-enter rule prevents respawning at the post from resolving the race, and a same-server-frame tie is awarded to the seeker.
+- Every active real hider can win by reaching `SeekerHoldingSpawn`, whether tagged or untagged. A hider who enters the 8-stud capture radius after being outside the 12-stud outer radius becomes a round winner, is promoted to spectator, and moves to a waiting-area slot.
+- If the seeker reaches the post, every hider whose tag is still pending is eliminated at once. The same outside-then-enter rule prevents respawning at the post from resolving the race. In a same-server-frame race, the seeker defeats tagged hiders while an untagged hider still wins.
 - During Seeking, the server raycasts around the post perimeter to generate a ground-flush, non-colliding red capture-area disc, segmented boundary, and floating label. The indicator follows `SeekerHoldingSpawn` if the marker moves and is never baked into the Studio-authored map.
 - Winning and eliminated real hiders become spectators and move to their waiting-area slots; eliminated practice mannequins are removed. Stationary practice mannequins cannot race to the post or become winners.
 - A right-side **HIDER ROSTER** groups every round hider under **ACTIVE**, **TAGGED**, **WINNERS**, or **ELIMINATED**, with player avatars, names, counts, and practice-bot fallbacks.
 - Resolving the final hider as a winner or elimination displays the completed roster for two seconds, then automatically resets the round and starts a new round when enough players remain.
-- The HUD gives seekers and tagged hiders role-specific instructions and shows how many pending tags will be banked together.
+- The HUD tells every hider that reaching the post wins, gives tagged hiders the urgent race warning, and shows the seeker how many pending tags will be banked together.
 - A tagged real hider gets a bright red border around the entire screen and the warning `YOU'VE BEEN TAGGED. RUN TO THE POST BEFORE THE SEEKER TO WIN` until their tag status changes.
 - When Seeking begins, mouse camera movement is restored immediately while the black camera layer fades away.
 - The countdown is hidden.
@@ -149,6 +149,8 @@ WaitingToStart -> SelectingRoles -> Hiding -> Seeking
 
 ### Touch and gamepad
 
+- While Seeking on a touch device, press the on-screen **TAG** button to fire through the center crosshair.
+- A short tap anywhere in the unobstructed game view tags along a ray through that exact screen point, so a seeker can directly tap a visible hider. Camera drags and touches consumed by UI or native movement controls do not fire.
 - The reset button uses `GuiButton.Activated`, which is cross-platform.
 - The desktop controls guide is hidden when a keyboard is not available.
 - Explicit gamepad selection/navigation configuration has not yet been added or comprehensively tested.
@@ -290,7 +292,7 @@ Responsibilities:
 - Show/hide the Hiding timer and distinguish waiting-for-players from automatic-start countdown state.
 - Display the local player's replicated assignment as `You are the seeker`, `You are hiding`, or `You are spectating` throughout the active round.
 - Show role-specific phase prompts for hiding, aiming/tagging, returning to the post, being tagged, and spectating.
-- Render the seeker's center-screen crosshair and submit left-click aim rays during Seeking.
+- Render the seeker's center-screen crosshair and submit left-click, touch-button, or direct screen-tap aim rays during Seeking.
 - Render the right-side hider roster with separate Active, Tagged, Winners, and Eliminated sections.
 - Render an unmistakable full-screen red perimeter and expanded warning prompt for the locally tagged hider.
 - Show a winning hider a green role banner and a clear round-win message while their name remains in the Winners section.
@@ -360,13 +362,13 @@ Then use Studio's **Server & Clients** test mode with two through five clients. 
 - A reset clears role attributes, spreads everyone around `WaitingSpawn`, and automatically schedules a fresh random selection when at least two players remain.
 - Respawning returns a participant to the spawn appropriate for their current role and phase.
 - A seeker departure or final-hider departure resets; one hider leaving while another remains continues; spectator departure does not affect the round.
-- A seeker click prioritizes a living hider directly under the crosshair, then accepts a near miss within `TagAssistRadius`; walls, corners, and non-hider characters still block the final line-of-sight check.
+- A seeker click, center-fire touch, or direct screen tap prioritizes a living hider on the submitted aim ray, then accepts a near miss within `TagAssistRadius`; walls, corners, and non-hider characters still block the final line-of-sight check.
 - Head, torso, arms, legs, and the spaces between them are covered by the active hider's invisible tag volume; removing a hider's active role removes that volume.
 - Multiple distinct hiders can be tagged before returning, while duplicate clicks on an already-tagged hider are ignored.
 - A tagged hider sees the red screen border and full race-to-post warning immediately; other hiders and the seeker do not see that local alert.
-- A tagged hider who was outside the post's outer radius and enters the capture area before the seeker moves to **WINNERS**, becomes a spectator at the waiting area, and sees the win message.
+- Any real hider who was outside the post's outer radius and enters the capture area moves to **WINNERS**, becomes a spectator at the waiting area, and sees the win message, even when they were never tagged.
 - The seeker still eliminates every remaining tagged hider with one return, while hiders that already won remain winners and cannot be eliminated.
-- Both seeker and tagged hiders must cross outside the post's outer radius before returning; character reset/respawn at the post cannot resolve the race.
+- The seeker and every hider must cross outside the post's outer radius before entering; character reset/respawn at the post cannot resolve the race.
 - If a seeker and tagged hider enter during the same server frame, the seeker wins the tie and the hider is eliminated.
 - The runtime post indicator appears only during Seeking, sits flush on the sampled ground, matches the horizontal 8-stud capture radius, and follows the marker after a `CFrame` change.
 - One return promotes every tagged real hider to spectator and removes every tagged practice hider.

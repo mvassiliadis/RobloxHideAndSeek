@@ -153,6 +153,7 @@ local function RoundApp()
 	local altHeldRef = React.useRef(false)
 	local cameraSnapGenerationRef = React.useRef(0)
 	local resetButtonRef = React.useRef(nil)
+	local tagButtonRef = React.useRef(nil)
 	local pulseScaleRef = React.useRef(nil)
 	local blackoutRef = React.useRef(nil)
 	local blackoutTweenRef = React.useRef(nil)
@@ -308,6 +309,28 @@ local function RoundApp()
 		end
 	end
 
+	local function canRequestTag(): boolean
+		return roundState:GetAttribute("Phase") == "Seeking"
+			and localPlayer:GetAttribute("Role") == "Seeker"
+	end
+
+	local function requestTagAlongRay(ray: Ray)
+		if not canRequestTag() then
+			return
+		end
+
+		tagRequested:FireServer(ray.Origin, ray.Direction.Unit)
+	end
+
+	local function requestCenteredTag()
+		local camera = Workspace.CurrentCamera
+		if not camera or not canRequestTag() then
+			return
+		end
+
+		tagRequested:FireServer(camera.CFrame.Position, camera.CFrame.LookVector)
+	end
+
 	React.useEffect(function()
 		mountedRef.current = true
 
@@ -381,11 +404,35 @@ local function RoundApp()
 					and roundState:GetAttribute("Phase") == "Seeking"
 					and localPlayer:GetAttribute("Role") == "Seeker"
 				then
-					local camera = Workspace.CurrentCamera
-					if camera then
-						tagRequested:FireServer(camera.CFrame.Position, camera.CFrame.LookVector)
+					requestCenteredTag()
+				end
+			end),
+			UserInputService.TouchTap:Connect(function(touchPositions, gameProcessed)
+				if gameProcessed or #touchPositions ~= 1 or not canRequestTag() then
+					return
+				end
+
+				local touchPosition = touchPositions[1]
+				local tagButton = tagButtonRef.current
+				if tagButton then
+					local button = tagButton :: GuiObject
+					local buttonPosition = button.AbsolutePosition
+					local buttonSize = button.AbsoluteSize
+					if touchPosition.X >= buttonPosition.X
+						and touchPosition.X <= buttonPosition.X + buttonSize.X
+						and touchPosition.Y >= buttonPosition.Y
+						and touchPosition.Y <= buttonPosition.Y + buttonSize.Y
+					then
+						return
 					end
 				end
+
+				local camera = Workspace.CurrentCamera
+				if not camera then
+					return
+				end
+
+				requestTagAlongRay(camera:ScreenPointToRay(touchPosition.X, touchPosition.Y))
 			end),
 			UserInputService.InputEnded:Connect(function(input)
 				if input.KeyCode == Enum.KeyCode.LeftAlt then
@@ -580,6 +627,7 @@ local function RoundApp()
 		end
 	end, { phase, role })
 
+	local touchEnabled = UserInputService.TouchEnabled
 	local phaseText = if starting
 		then if soloPracticeWaiting then "PRACTICE ROUND STARTING" else "ROUND STARTING"
 		elseif waiting
@@ -592,11 +640,13 @@ local function RoundApp()
 				then `{taggedHiderCount} {taggedHiderNoun} TAGGED\nKEEP LOOKING OR RETURN TO THE POST`
 				elseif roundHidersResolved
 				then if #winnerHiders > 0 then "ROUND COMPLETE!\nCHECK THE WINNERS LIST" else "ALL HIDERS ELIMINATED!"
-				else "FIND A HIDER\nAIM AND CLICK TO TAG"
+				else if touchEnabled
+					then "FIND A HIDER\nTAP THEM OR USE THE TAG BUTTON"
+					else "FIND A HIDER\nAIM AND CLICK TO TAG"
 			elseif role == "Hider"
 			then if localPlayerIsTagged
 				then "YOU'VE BEEN TAGGED.\nRUN TO THE POST BEFORE THE SEEKER TO WIN"
-				else "STAY OUT OF SIGHT OF THE SEEKER"
+				else "REACH THE SEEKER POST TO WIN\nSTAY OUT OF SIGHT"
 			elseif localPlayerIsWinner
 			then "YOU REACHED THE POST FIRST!\nYOU WIN THIS ROUND"
 			else "SEEKING"
@@ -628,7 +678,7 @@ local function RoundApp()
 		then HIDING_COLOR
 		else Color3.fromRGB(210, 216, 225)
 	local hasRole = roleText ~= ""
-	local compactSelectionCards = UserInputService.TouchEnabled
+	local compactSelectionCards = touchEnabled
 	local controlsGuideText = if cursorActive
 		then CURSOR_GUIDE_TEXT
 		elseif seeking and role == "Seeker" and hasPendingTags
@@ -1019,6 +1069,39 @@ local function RoundApp()
 				Corner = e("UICorner", {
 					CornerRadius = UDim.new(1, 0),
 				}),
+			}),
+		}),
+
+		TagButton = e("TextButton", {
+			ref = tagButtonRef,
+			Active = true,
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			AutoButtonColor = true,
+			BackgroundColor3 = SEEKING_COLOR,
+			BackgroundTransparency = 0.08,
+			BorderSizePixel = 0,
+			FontFace = GOTHAM_HEAVY,
+			Position = UDim2.new(1, -190, 1, -105),
+			Size = UDim2.fromOffset(88, 88),
+			Text = "TAG",
+			TextColor3 = Color3.new(1, 1, 1),
+			TextSize = 22,
+			TextStrokeColor3 = Color3.fromRGB(91, 20, 24),
+			TextStrokeTransparency = 0.35,
+			Visible = touchEnabled and seeking and role == "Seeker",
+			ZIndex = 8,
+			[React.Event.Activated] = requestCenteredTag,
+		}, {
+			Corner = e("UICorner", {
+				CornerRadius = UDim.new(1, 0),
+			}),
+			Stroke = e("UIStroke", {
+				Color = Color3.fromRGB(255, 224, 224),
+				Thickness = 3,
+				Transparency = 0.12,
+			}),
+			Scale = e("UIScale", {
+				Scale = 1,
 			}),
 		}),
 
