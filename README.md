@@ -103,6 +103,7 @@ WaitingToStart -> SelectingRoles -> Hiding -> Seeking
 - The last five seconds turn red and pulse.
 - The seeker waits on the capture-area edge behind `SeekerHoldingSpawn`, facing the post; hiders occupy unique, shuffled markers beneath `HiderSpawns`; spectators remain in distinct slots around `WaitingSpawn`.
 - While Hiding, the server anchors the seeker's `HumanoidRootPart` at that edge position so temporary or open holding areas cannot be escaped. The root is unanchored before release, on reset, and when assignments are cleared.
+- The seeker's 3D view fades to black while the HUD and countdown remain visible, and mouse camera movement is locked for the full Hiding phase.
 - When the countdown finishes, the server releases the seeker in place at the post indicator's edge and changes the phase to `Seeking`.
 
 ### 4. Seeking
@@ -116,6 +117,7 @@ WaitingToStart -> SelectingRoles -> Hiding -> Seeking
 - A right-side **HIDER ROSTER** groups every round hider under **ACTIVE**, **TAGGED**, or **ELIMINATED**, with player avatars, names, counts, and practice-bot fallbacks.
 - Eliminating the final hider displays the completed roster for two seconds, then automatically resets the round and starts a new round when enough players remain.
 - The HUD gives seekers and tagged hiders role-specific instructions and shows how many pending tags will be banked together.
+- When Seeking begins, mouse camera movement is restored immediately while the black camera layer fades away.
 - The countdown is hidden.
 - This phase has no time limit.
 - Late joiners become spectators and are kept in distinct slots around `WaitingSpawn` rather than joining the active round.
@@ -293,6 +295,7 @@ Responsibilities:
 - Display the discreet bottom-left controls guide on keyboard devices.
 - Apply the macOS first-person cursor startup/respawn refresh.
 - Align the seeker's first-person camera directly with the center of `SeekerHoldingSpawn` when entering Hiding or Seeking and after respawn.
+- Fade the seeker's world view to and from black and suppress mouse-look input during Hiding without covering the HUD.
 
 Clients do not choose or submit roles, decide phase transitions, or directly mutate server state.
 
@@ -346,6 +349,7 @@ Then use Studio's **Server & Clients** test mode with two through five clients. 
 - A waiting roster change restarts the startup countdown; dropping below two cancels it.
 - After startup, all clients show the same candidate icons for five seconds, slow onto the selected seeker, and receive no active role attribute until the reveal completes.
 - The seeker begins eight studs behind `SeekerHoldingSpawn` on the indicator edge, with both character and first-person camera aimed directly at the post center, and is unanchored there when Seeking begins. Rotate the marker to choose the side where the seeker waits.
+- During Hiding, the seeker's world view fades fully to black, the HUD remains readable, and mouse movement cannot rotate the camera; Seeking restores mouse-look and fades the world back in.
 - A reset clears role attributes, spreads everyone around `WaitingSpawn`, and automatically schedules a fresh random selection when at least two players remain.
 - Respawning returns a participant to the spawn appropriate for their current role and phase.
 - A seeker departure or final-hider departure resets; one hider leaving while another remains continues; spectator departure does not affect the round.

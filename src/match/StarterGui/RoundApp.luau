@@ -1,6 +1,7 @@
 --!strict
 
 local Players = game:GetService("Players")
+local ContextActionService = game:GetService("ContextActionService")
 local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -35,6 +36,10 @@ local ELIMINATED_HIDER_COLOR = Color3.fromRGB(143, 152, 168)
 local DEFAULT_GUIDE_TEXT = "WASD  MOVE   •   MOUSE  LOOK\nHOLD ALT  CURSOR   •   HOLD R  RESET"
 local CURSOR_GUIDE_TEXT = "CURSOR ACTIVE\nRELEASE ALT TO LOOK"
 local R_HOLD_SECONDS = 1
+local SEEKER_CAMERA_LOCK_ACTION = "LockSeekerHidingCamera"
+local SEEKER_CAMERA_LOCK_PRIORITY = Enum.ContextActionPriority.High.Value + 100
+local BLACKOUT_FADE_IN_DURATION = 0.65
+local BLACKOUT_FADE_OUT_DURATION = 0.8
 
 type HiderStatus = "Active" | "Tagged" | "Eliminated"
 type HiderRosterItem = {
@@ -110,6 +115,14 @@ local function parseHiderRoster(serializedRoster: unknown): { HiderRosterItem }
 	return roster
 end
 
+local function sinkSeekerCameraInput(
+	_actionName: string,
+	_inputState: Enum.UserInputState,
+	_inputObject: InputObject
+): Enum.ContextActionResult
+	return Enum.ContextActionResult.Sink
+end
+
 local function RoundApp()
 	local phase, setPhase = React.useState(roundState:GetAttribute("Phase"))
 	local timeRemaining, setTimeRemaining = React.useState(roundState:GetAttribute("TimeRemaining"))
@@ -136,6 +149,8 @@ local function RoundApp()
 	local cameraSnapGenerationRef = React.useRef(0)
 	local resetButtonRef = React.useRef(nil)
 	local pulseScaleRef = React.useRef(nil)
+	local blackoutRef = React.useRef(nil)
+	local blackoutTweenRef = React.useRef(nil)
 
 	local function setCursorMode(enabled: boolean)
 		if not UserInputService.KeyboardEnabled then
@@ -499,6 +514,59 @@ local function RoundApp()
 		end
 	end, { numericTimeRemaining, timerWarning })
 
+	React.useEffect(function()
+		local blackout = blackoutRef.current
+		if not blackout then
+			return
+		end
+
+		local existingTween = blackoutTweenRef.current
+		if existingTween then
+			(existingTween :: Tween):Cancel()
+		end
+
+		local blackoutActive = phase == "Hiding" and role == "Seeker"
+		local duration = if blackoutActive then BLACKOUT_FADE_IN_DURATION else BLACKOUT_FADE_OUT_DURATION
+		local tween = TweenService:Create(
+			blackout :: Frame,
+			TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut),
+			{ BackgroundTransparency = if blackoutActive then 0 else 1 }
+		)
+		blackoutTweenRef.current = tween
+		tween:Play()
+
+		return function()
+			tween:Cancel()
+			if blackoutTweenRef.current == tween then
+				blackoutTweenRef.current = nil
+			end
+		end
+	end, { phase, role })
+
+	React.useEffect(function()
+		local cameraLocked = phase == "Hiding" and role == "Seeker"
+		if not cameraLocked then
+			ContextActionService:UnbindAction(SEEKER_CAMERA_LOCK_ACTION)
+			return
+		end
+
+		local previousMouseDeltaSensitivity = UserInputService.MouseDeltaSensitivity
+		UserInputService.MouseDeltaSensitivity = 0
+		ContextActionService:BindActionAtPriority(
+			SEEKER_CAMERA_LOCK_ACTION,
+			sinkSeekerCameraInput,
+			false,
+			SEEKER_CAMERA_LOCK_PRIORITY,
+			Enum.UserInputType.MouseMovement,
+			Enum.UserInputType.MouseWheel
+		)
+
+		return function()
+			ContextActionService:UnbindAction(SEEKER_CAMERA_LOCK_ACTION)
+			UserInputService.MouseDeltaSensitivity = previousMouseDeltaSensitivity
+		end
+	end, { phase, role })
+
 	local phaseText = if starting
 		then if soloPracticeWaiting then "PRACTICE ROUND STARTING" else "ROUND STARTING"
 		elseif waiting
@@ -806,6 +874,16 @@ local function RoundApp()
 	}
 
 	return e(React.Fragment, nil, {
+		SeekerBlackout = e("Frame", {
+			BackgroundColor3 = Color3.new(0, 0, 0),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Position = UDim2.fromOffset(-100, -100),
+			Size = UDim2.new(1, 200, 1, 200),
+			ZIndex = 1,
+			ref = blackoutRef,
+		}),
+
 		PhaseLabel = e("TextLabel", {
 			AnchorPoint = Vector2.new(0.5, 0),
 			BackgroundTransparency = 1,
