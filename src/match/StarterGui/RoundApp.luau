@@ -31,6 +31,7 @@ local SELECTION_ACCENT_COLOR = Color3.fromRGB(255, 196, 74)
 local SELECTION_DIM_COLOR = Color3.fromRGB(82, 91, 110)
 local ACTIVE_HIDER_COLOR = Color3.fromRGB(92, 190, 255)
 local TAGGED_HIDER_COLOR = Color3.fromRGB(255, 178, 75)
+local WINNER_HIDER_COLOR = Color3.fromRGB(105, 225, 140)
 local ELIMINATED_HIDER_COLOR = Color3.fromRGB(143, 152, 168)
 local TAGGED_ALERT_COLOR = Color3.fromRGB(255, 45, 45)
 
@@ -42,7 +43,7 @@ local SEEKER_CAMERA_LOCK_PRIORITY = Enum.ContextActionPriority.High.Value + 100
 local BLACKOUT_FADE_IN_DURATION = 0.65
 local BLACKOUT_FADE_OUT_DURATION = 0.8
 
-type HiderStatus = "Active" | "Tagged" | "Eliminated"
+type HiderStatus = "Active" | "Tagged" | "Winner" | "Eliminated"
 type HiderRosterItem = {
 	id: string,
 	userId: number,
@@ -101,7 +102,10 @@ local function parseHiderRoster(serializedRoster: unknown): { HiderRosterItem }
 			and typeof(rawEntry.id) == "string"
 			and typeof(rawEntry.userId) == "number"
 			and typeof(rawEntry.name) == "string"
-			and (rawEntry.status == "Active" or rawEntry.status == "Tagged" or rawEntry.status == "Eliminated")
+			and (rawEntry.status == "Active"
+				or rawEntry.status == "Tagged"
+				or rawEntry.status == "Winner"
+				or rawEntry.status == "Eliminated")
 		then
 			table.insert(roster, {
 				id = rawEntry.id,
@@ -425,8 +429,10 @@ local function RoundApp()
 	local hiderRoster = parseHiderRoster(hiderRosterJson)
 	local activeHiders: { HiderRosterItem } = {}
 	local taggedHiders: { HiderRosterItem } = {}
+	local winnerHiders: { HiderRosterItem } = {}
 	local eliminatedHiders: { HiderRosterItem } = {}
 	local localPlayerIsTagged = false
+	local localPlayerIsWinner = false
 	for _, hider in hiderRoster do
 		if hider.status == "Active" then
 			table.insert(activeHiders, hider)
@@ -434,6 +440,11 @@ local function RoundApp()
 			table.insert(taggedHiders, hider)
 			if hider.userId == localPlayer.UserId then
 				localPlayerIsTagged = true
+			end
+		elseif hider.status == "Winner" then
+			table.insert(winnerHiders, hider)
+			if hider.userId == localPlayer.UserId then
+				localPlayerIsWinner = true
 			end
 		else
 			table.insert(eliminatedHiders, hider)
@@ -454,7 +465,7 @@ local function RoundApp()
 	local taggedHiderCount = #taggedHiders
 	local hasPendingTags = taggedHiderCount > 0
 	local taggedHiderNoun = if taggedHiderCount == 1 then "HIDER" else "HIDERS"
-	local allHidersEliminated = #hiderRoster > 0 and #activeHiders == 0 and taggedHiderCount == 0
+	local roundHidersResolved = #hiderRoster > 0 and #activeHiders == 0 and taggedHiderCount == 0
 
 	React.useEffect(function()
 		if not selecting or #selectionCandidates == 0 then
@@ -579,13 +590,15 @@ local function RoundApp()
 		then if role == "Seeker"
 			then if hasPendingTags
 				then `{taggedHiderCount} {taggedHiderNoun} TAGGED\nKEEP LOOKING OR RETURN TO THE POST`
-				elseif allHidersEliminated
-				then "ALL HIDERS ELIMINATED!"
+				elseif roundHidersResolved
+				then if #winnerHiders > 0 then "ROUND COMPLETE!\nCHECK THE WINNERS LIST" else "ALL HIDERS ELIMINATED!"
 				else "FIND A HIDER\nAIM AND CLICK TO TAG"
 			elseif role == "Hider"
 			then if localPlayerIsTagged
 				then "YOU'VE BEEN TAGGED.\nRUN TO THE POST BEFORE THE SEEKER TO WIN"
 				else "STAY OUT OF SIGHT OF THE SEEKER"
+			elseif localPlayerIsWinner
+			then "YOU REACHED THE POST FIRST!\nYOU WIN THIS ROUND"
 			else "SEEKING"
 		else if role == "Seeker"
 		then "WAIT FOR PLAYERS TO HIDE"
@@ -598,14 +611,18 @@ local function RoundApp()
 			then `Solo practice starting in {math.max(0, math.floor(numericStartTimeRemaining))}...`
 			else `Starting in {math.max(0, math.floor(numericStartTimeRemaining))}...`
 		else "Need at least 2 players"
-	local roleText = if role == "Seeker"
+	local roleText = if localPlayerIsWinner
+		then "You won this round"
+		elseif role == "Seeker"
 		then if practiceModeActive == true then "You are the seeker (practice)" else "You are the seeker"
 		elseif role == "Hider"
 		then "You are hiding"
 		elseif role == "Spectator"
 		then "You are spectating"
 		else ""
-	local roleColor = if role == "Seeker"
+	local roleColor = if localPlayerIsWinner
+		then WINNER_HIDER_COLOR
+		elseif role == "Seeker"
 		then SEEKING_COLOR
 		elseif role == "Hider"
 		then HIDING_COLOR
@@ -863,8 +880,14 @@ local function RoundApp()
 
 	local activeSectionHeight = 25 + math.max(1, #activeHiders) * rosterRowHeight
 	local taggedSectionHeight = 25 + math.max(1, #taggedHiders) * rosterRowHeight
+	local winnerSectionHeight = 25 + math.max(1, #winnerHiders) * rosterRowHeight
 	local eliminatedSectionHeight = 25 + math.max(1, #eliminatedHiders) * rosterRowHeight
-	local rosterPanelHeight = 52 + activeSectionHeight + taggedSectionHeight + eliminatedSectionHeight + 12
+	local rosterPanelHeight = 52
+		+ activeSectionHeight
+		+ taggedSectionHeight
+		+ winnerSectionHeight
+		+ eliminatedSectionHeight
+		+ 12
 	local rosterSections = {
 		Layout = e("UIListLayout", {
 			Padding = UDim.new(0, 6),
@@ -872,7 +895,8 @@ local function RoundApp()
 		}),
 		Active = createRosterSection("Active", ACTIVE_HIDER_COLOR, activeHiders, 1),
 		Tagged = createRosterSection("Tagged", TAGGED_HIDER_COLOR, taggedHiders, 2),
-		Eliminated = createRosterSection("Eliminated", ELIMINATED_HIDER_COLOR, eliminatedHiders, 3),
+		Winners = createRosterSection("Winners", WINNER_HIDER_COLOR, winnerHiders, 3),
+		Eliminated = createRosterSection("Eliminated", ELIMINATED_HIDER_COLOR, eliminatedHiders, 4),
 	}
 
 	return e(React.Fragment, nil, {

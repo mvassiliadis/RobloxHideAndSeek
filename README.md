@@ -112,11 +112,12 @@ WaitingToStart -> SelectingRoles -> Hiding -> Seeking
 - Every active hider receives a server-generated, invisible, non-colliding full-body tag volume, so limbs, gaps in an avatar rig, and cosmetic geometry do not reduce the reliable target silhouette. It is removed when the player stops being an active hider and is never baked into the map.
 - The server first raycasts the exact submitted aim against that volume, then uses a configurable 1.5-stud-radius spherecast only when the center ray misses. A final thin line-of-sight check, 300-stud maximum range, and living-hider validation keep the forgiving tag from reaching through walls or around corners.
 - The seeker can tag any number of currently active hiders before returning to the post. Tagged hiders remain active in the world until the tags are banked.
-- Returning to `SeekerHoldingSpawn` eliminates every currently tagged hider at once. Horizontal distance is measured against the post indicator: the seeker must have moved outside its 12-stud outer radius before entering its 8-stud capture radius, so respawning at the post cannot bank tags.
+- Each tagged real hider can race the seeker back to `SeekerHoldingSpawn`. A hider who enters the 8-stud capture radius after being outside the 12-stud outer radius becomes a round winner, is promoted to spectator, and moves to a waiting-area slot. Untagged hiders cannot win by entering the post.
+- If the seeker reaches the post first, every hider whose tag is still pending is eliminated at once. The same outside-then-enter rule prevents respawning at the post from resolving the race, and a same-server-frame tie is awarded to the seeker.
 - During Seeking, the server raycasts around the post perimeter to generate a ground-flush, non-colliding red capture-area disc, segmented boundary, and floating label. The indicator follows `SeekerHoldingSpawn` if the marker moves and is never baked into the Studio-authored map.
-- Eliminated real hiders become spectators and move to their waiting-area slots; eliminated practice mannequins are removed.
-- A right-side **HIDER ROSTER** groups every round hider under **ACTIVE**, **TAGGED**, or **ELIMINATED**, with player avatars, names, counts, and practice-bot fallbacks.
-- Eliminating the final hider displays the completed roster for two seconds, then automatically resets the round and starts a new round when enough players remain.
+- Winning and eliminated real hiders become spectators and move to their waiting-area slots; eliminated practice mannequins are removed. Stationary practice mannequins cannot race to the post or become winners.
+- A right-side **HIDER ROSTER** groups every round hider under **ACTIVE**, **TAGGED**, **WINNERS**, or **ELIMINATED**, with player avatars, names, counts, and practice-bot fallbacks.
+- Resolving the final hider as a winner or elimination displays the completed roster for two seconds, then automatically resets the round and starts a new round when enough players remain.
 - The HUD gives seekers and tagged hiders role-specific instructions and shows how many pending tags will be banked together.
 - A tagged real hider gets a bright red border around the entire screen and the warning `YOU'VE BEEN TAGGED. RUN TO THE POST BEFORE THE SEEKER TO WIN` until their tag status changes.
 - When Seeking begins, mouse camera movement is restored immediately while the black camera layer fades away.
@@ -187,7 +188,7 @@ Select `ReplicatedStorage.RoundState` in Studio and edit its attributes:
 | `RoleSelectionEndTime` | `0` | Server-clock deadline used to synchronize roulette animation. Runtime-owned by the server. |
 | `SelectionUserIds` | empty | Comma-separated candidate UserIds in shuffled display order. Runtime-owned by the server. |
 | `SelectedSeekerUserId` | `0` | Server-selected roulette target. Runtime-owned by the server. |
-| `HiderRosterJson` | `[]` | Ordered JSON roster of real and practice hiders with `Active`, `Tagged`, or `Eliminated` status. Runtime-owned by the server. |
+| `HiderRosterJson` | `[]` | Ordered JSON roster of real and practice hiders with `Active`, `Tagged`, `Winner`, or `Eliminated` status. Runtime-owned by the server. |
 | `TagAssistRadius` | `1.5` | Radius in studs for the forgiving tag spherecast used after the exact center ray misses. Clamped from 0 (disabled) through 4. |
 | `StudioPracticeEnabled` | `true` | Enables automatic one-player practice rounds in Studio only. |
 | `StudioPracticeHiderCount` | `2` | Number of practice mannequins, clamped from 1 through 4. |
@@ -205,7 +206,7 @@ Other constants currently live in scripts:
 - Server reset debounce: `1` second in `RoundController`.
 - Desktop `R` hold duration: `1` second in `RoundApp`.
 - Maximum tag distance: `300` studs in `RoundController`.
-- Seeker-post capture radius: `8` studs, after crossing a `12`-stud outer radius, in `RoundController`.
+- Seeker-post capture radius: `8` studs, after crossing a `12`-stud outer radius, for both sides of a tagged-hider race in `RoundController`.
 
 ## Studio hierarchy and ownership
 
@@ -239,7 +240,7 @@ StarterGui
     ├── RoundApp (ModuleScript)
     └── RoundUI (LocalScript bootstrap)
 
-During Play, React creates the normal phase/role/timer HUD plus `SelectionOverlay`, its roulette candidate cards, the seeker crosshair, the three-section `HiderRosterPanel`, `ResetButton`, and `ControlsGuide` beneath `ReactRoot`.
+During Play, React creates the normal phase/role/timer HUD plus `SelectionOverlay`, its roulette candidate cards, the seeker crosshair, the four-section `HiderRosterPanel`, `ResetButton`, and `ControlsGuide` beneath `ReactRoot`.
 
 Workspace
 ├── Terrain
@@ -271,10 +272,10 @@ Responsibilities:
 - Reposition characters on assignment and respawn using each marker's full `CFrame` plus a small vertical offset.
 - Give every connected player a stable waiting-area slot on a six-stud grid around `WaitingSpawn`, reclaiming the slot when they leave.
 - Reset when the seeker or final hider leaves, while allowing rounds to continue after spectator departures or a non-final hider departure.
-- Generate query-only full-body tag volumes and validate exact and forgiving seeker aim with final thin-ray line of sight, then track multiple pending tags and eliminate the full group at the holding post.
+- Generate query-only full-body tag volumes and validate exact and forgiving seeker aim with final thin-ray line of sight, then track multiple pending tags and authoritatively resolve each race back to the holding post.
 - Generate and maintain the Seeking-only visual indicator for the post's 8-stud capture area at runtime.
-- Replicate the ordered hider roster and its Active, Tagged, and Eliminated transitions as JSON.
-- Promote eliminated hiders to spectators and reset automatically after the final hider is eliminated.
+- Replicate the ordered hider roster and its Active, Tagged, Winner, and Eliminated transitions as JSON.
+- Promote winning and eliminated hiders to spectators and reset automatically after the final hider is resolved.
 - In Studio, create and clean up one-player practice rounds with configurable, raycastable hider mannequins.
 - Replicate state through `RoundState` attributes.
 - Accept playtester reset requests with server-side debounce.
@@ -290,8 +291,9 @@ Responsibilities:
 - Display the local player's replicated assignment as `You are the seeker`, `You are hiding`, or `You are spectating` throughout the active round.
 - Show role-specific phase prompts for hiding, aiming/tagging, returning to the post, being tagged, and spectating.
 - Render the seeker's center-screen crosshair and submit left-click aim rays during Seeking.
-- Render the right-side hider roster with separate Active, Tagged, and Eliminated sections.
+- Render the right-side hider roster with separate Active, Tagged, Winners, and Eliminated sections.
 - Render an unmistakable full-screen red perimeter and expanded warning prompt for the locally tagged hider.
+- Show a winning hider a green role banner and a clear round-win message while their name remains in the Winners section.
 - Render the synchronized avatar roulette during `SelectingRoles`, with a server-clock-driven ease-out that lands on the authoritative seeker.
 - Pulse the final five countdown values.
 - Send reset requests from the reset button or held `R` key.
@@ -345,7 +347,7 @@ Filesystem validation for this implementation includes both `rojo sourcemap matc
 
 A one-client Play check on 2026-08-05 confirmed the pre-practice controller and HUD loaded without console errors. That check predates Studio solo practice and must be repeated after syncing this version. The available Studio bridge does not launch multi-client Server & Clients sessions, so the multiplayer matrix remains a manual Studio check.
 
-For a fast solo check, use normal **Test** mode with one player. Confirm that the HUD announces a practice round, two labeled mannequins appear at hider markers, both can be tagged and banked at the seeker post, and the final mannequin resets the round.
+For a fast solo check, use normal **Test** mode with one player. Confirm that the HUD announces a practice round, two labeled mannequins appear at hider markers, both can be tagged and banked at the seeker post, and the final mannequin resets the round. Practice mannequins are stationary, so the hider-win path requires a multi-client test.
 
 Then use Studio's **Server & Clients** test mode with two through five clients. The five-second startup delay is specifically intended to absorb asynchronous test-client connections. Verify:
 
@@ -362,10 +364,13 @@ Then use Studio's **Server & Clients** test mode with two through five clients. 
 - Head, torso, arms, legs, and the spaces between them are covered by the active hider's invisible tag volume; removing a hider's active role removes that volume.
 - Multiple distinct hiders can be tagged before returning, while duplicate clicks on an already-tagged hider are ignored.
 - A tagged hider sees the red screen border and full race-to-post warning immediately; other hiders and the seeker do not see that local alert.
-- The seeker must cross outside the post's outer radius before returning; character reset/respawn at the post does not eliminate pending hiders.
+- A tagged hider who was outside the post's outer radius and enters the capture area before the seeker moves to **WINNERS**, becomes a spectator at the waiting area, and sees the win message.
+- The seeker still eliminates every remaining tagged hider with one return, while hiders that already won remain winners and cannot be eliminated.
+- Both seeker and tagged hiders must cross outside the post's outer radius before returning; character reset/respawn at the post cannot resolve the race.
+- If a seeker and tagged hider enter during the same server frame, the seeker wins the tie and the hider is eliminated.
 - The runtime post indicator appears only during Seeking, sits flush on the sampled ground, matches the horizontal 8-stud capture radius, and follows the marker after a `CFrame` change.
 - One return promotes every tagged real hider to spectator and removes every tagged practice hider.
-- All three roster sections and counts update together, and eliminating the final hider resets after the two-second completion display.
+- All four roster sections and counts update together, and resolving the final hider resets after the two-second completion display.
 - Late joiners during Hiding or Seeking receive `Spectator` and stay in separate slots around `WaitingSpawn`.
 - No transition depends on touching, approaching, or retaining `SeekerSpot`.
 

@@ -48,7 +48,7 @@ local POST_INDICATOR_COLOR = Color3.fromRGB(255, 92, 92)
 
 type Role = "Seeker" | "Hider" | "Spectator"
 type TagTarget = Player | Model
-type HiderStatus = "Active" | "Tagged" | "Eliminated"
+type HiderStatus = "Active" | "Tagged" | "Winner" | "Eliminated"
 type HiderRosterEntry = {
 	id: string,
 	userId: number,
@@ -309,6 +309,7 @@ local practiceHiders: { Model } = {}
 local practiceHiderFolder: Folder? = nil
 local taggedHiderTargets: { TagTarget } = {}
 local taggedHiderSet: { [Instance]: boolean } = {}
+local taggedHiderWasAwayFromPost: { [Instance]: boolean } = {}
 local hiderRoster: { [string]: HiderRosterEntry } = {}
 local hiderRosterOrder: { string } = {}
 local hiderRosterKeyByTarget: { [Instance]: string } = {}
@@ -336,6 +337,7 @@ local function clearPendingTags()
 
 	table.clear(taggedHiderTargets)
 	table.clear(taggedHiderSet)
+	table.clear(taggedHiderWasAwayFromPost)
 	seekerWasAwayFromPost = false
 end
 
@@ -772,6 +774,10 @@ local function positionCharacterWhenReady(player: Player, character: Model)
 	pivotCharacterToAssignedSpawn(player, character)
 	updatePlayerTagHitbox(player, character)
 	setCharacterLocked(character, shouldLockPlayer(player))
+	if taggedHiderSet[player] then
+		-- Respawning cannot count as reaching the post with a pending tag.
+		taggedHiderWasAwayFromPost[player] = false
+	end
 
 	if player == seekerPlayer and #taggedHiderTargets > 0 then
 		-- Respawning at the post must not count as returning with a tagged hider.
@@ -1007,6 +1013,7 @@ local function removeTaggedHider(target: TagTarget): boolean
 	end
 
 	taggedHiderSet[target] = nil
+	taggedHiderWasAwayFromPost[target] = nil
 	local taggedIndex = table.find(taggedHiderTargets, target)
 	if taggedIndex then
 		table.remove(taggedHiderTargets, taggedIndex)
@@ -1028,6 +1035,7 @@ local function pruneInvalidTaggedHiders()
 		local target = taggedHiderTargets[index]
 		if not isTagTargetValid(target) then
 			taggedHiderSet[target] = nil
+			taggedHiderWasAwayFromPost[target] = nil
 			table.remove(taggedHiderTargets, index)
 			if target.Parent then
 				target:SetAttribute("Tagged", nil)
@@ -1052,6 +1060,44 @@ local function pruneInvalidTaggedHiders()
 	end
 	if rosterChanged then
 		replicateHiderRoster()
+	end
+end
+
+local function scheduleRoundResetIfComplete()
+	if getRemainingHiderCount() ~= 0 then
+		return
+	end
+
+	local thisGeneration = generation
+	task.delay(ROUND_COMPLETE_DELAY, function()
+		if thisGeneration == generation
+			and roundState:GetAttribute("Phase") == SEEKING_PHASE
+			and getRemainingHiderCount() == 0
+		then
+			resetRound(nil)
+		end
+	end)
+end
+
+local function awardTaggedHiderWinners(winningHiders: { Player })
+	local rosterChanged = false
+	for _, winningHider in winningHiders do
+		if taggedHiderSet[winningHider] and isTagTargetValid(winningHider) then
+			removeTaggedHider(winningHider)
+			setHiderStatus(winningHider, "Winner")
+			roleAssignments[winningHider] = SPECTATOR_ROLE
+			hiderSpawnAssignments[winningHider] = nil
+			if winningHider.Parent == Players then
+				winningHider:SetAttribute("Role", SPECTATOR_ROLE)
+				movePlayerToAssignedSpawn(winningHider)
+			end
+			rosterChanged = true
+		end
+	end
+
+	if rosterChanged then
+		replicateHiderRoster()
+		scheduleRoundResetIfComplete()
 	end
 end
 
@@ -1081,18 +1127,7 @@ local function eliminateTaggedHiders()
 		end
 	end
 	replicateHiderRoster()
-
-	if getRemainingHiderCount() == 0 then
-		local thisGeneration = generation
-		task.delay(ROUND_COMPLETE_DELAY, function()
-			if thisGeneration == generation
-				and roundState:GetAttribute("Phase") == SEEKING_PHASE
-				and getRemainingHiderCount() == 0
-			then
-				resetRound(nil)
-			end
-		end)
-	end
+	scheduleRoundResetIfComplete()
 end
 
 local function isFiniteVector3(value: Vector3): boolean
@@ -1213,6 +1248,14 @@ local function handleTagRequest(player: Player, cameraOrigin: unknown, cameraDir
 	table.insert(taggedHiderTargets, target)
 	target:SetAttribute("Tagged", true)
 	setHiderStatus(target, "Tagged")
+	if target:IsA("Player") then
+		local targetPlayer = target :: Player
+		local targetCharacter = targetPlayer.Character
+		local targetRoot = targetCharacter and targetCharacter:FindFirstChild("HumanoidRootPart")
+		taggedHiderWasAwayFromPost[targetPlayer] = targetRoot ~= nil
+			and targetRoot:IsA("BasePart")
+			and getPlanarDistanceFromSeekerPost(targetRoot.Position) > POST_AWAY_RADIUS
+	end
 	replicateHiderRoster()
 
 	if firstPendingTag then
@@ -1288,6 +1331,27 @@ end)
 
 tagRequested.OnServerEvent:Connect(handleTagRequest)
 
+local function getTaggedHiderWinnerCandidates(): { Player }
+	local winningHiders: { Player } = {}
+	for _, target in taggedHiderTargets do
+		if target:IsA("Player") and isTagTargetValid(target) then
+			local targetPlayer = target :: Player
+			local targetCharacter = targetPlayer.Character
+			local targetRoot = targetCharacter and targetCharacter:FindFirstChild("HumanoidRootPart")
+			if targetRoot and targetRoot:IsA("BasePart") then
+				local distanceFromPost = getPlanarDistanceFromSeekerPost(targetRoot.Position)
+				if distanceFromPost > POST_AWAY_RADIUS then
+					taggedHiderWasAwayFromPost[targetPlayer] = true
+				elseif taggedHiderWasAwayFromPost[targetPlayer] and distanceFromPost <= POST_CAPTURE_RADIUS then
+					table.insert(winningHiders, targetPlayer)
+				end
+			end
+		end
+	end
+
+	return winningHiders
+end
+
 RunService.Heartbeat:Connect(function()
 	if roundState:GetAttribute("Phase") ~= SEEKING_PHASE or #taggedHiderTargets == 0 or not seekerPlayer then
 		return
@@ -1298,18 +1362,25 @@ RunService.Heartbeat:Connect(function()
 		return
 	end
 
+	local winningHiders = getTaggedHiderWinnerCandidates()
+	local seekerReachedPost = false
 	local seekerCharacter = seekerPlayer.Character
 	local seekerRoot = seekerCharacter and seekerCharacter:FindFirstChild("HumanoidRootPart")
 	local seekerHumanoid = seekerCharacter and seekerCharacter:FindFirstChildOfClass("Humanoid")
-	if not seekerRoot or not seekerRoot:IsA("BasePart") or not seekerHumanoid or seekerHumanoid.Health <= 0 then
-		return
+	if seekerRoot and seekerRoot:IsA("BasePart") and seekerHumanoid and seekerHumanoid.Health > 0 then
+		local distanceFromPost = getPlanarDistanceFromSeekerPost(seekerRoot.Position)
+		if distanceFromPost > POST_AWAY_RADIUS then
+			seekerWasAwayFromPost = true
+		elseif seekerWasAwayFromPost and distanceFromPost <= POST_CAPTURE_RADIUS then
+			seekerReachedPost = true
+		end
 	end
 
-	local distanceFromPost = getPlanarDistanceFromSeekerPost(seekerRoot.Position)
-	if distanceFromPost > POST_AWAY_RADIUS then
-		seekerWasAwayFromPost = true
-	elseif seekerWasAwayFromPost and distanceFromPost <= POST_CAPTURE_RADIUS then
+	-- If both sides cross during the same server frame, the seeker wins the tie.
+	if seekerReachedPost then
 		eliminateTaggedHiders()
+	elseif #winningHiders > 0 then
+		awardTaggedHiderWinners(winningHiders)
 	end
 end)
 
