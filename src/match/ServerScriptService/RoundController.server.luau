@@ -30,6 +30,15 @@ local TAG_REQUEST_COOLDOWN = 0.15
 local POST_CAPTURE_RADIUS = 8
 local POST_AWAY_RADIUS = 12
 local ROUND_COMPLETE_DELAY = 2
+local POST_INDICATOR_SEGMENT_COUNT = 24
+local POST_GROUND_SAMPLE_COUNT = 8
+local POST_GROUND_SAMPLE_RADIUS = POST_CAPTURE_RADIUS
+local POST_GROUND_RAY_START_HEIGHT = 16
+local POST_GROUND_RAY_LENGTH = 128
+local POST_INDICATOR_FILL_HEIGHT = 0.035
+local POST_INDICATOR_BOUNDARY_HEIGHT = 0.055
+local POST_INDICATOR_SURFACE_GAP = 0.008
+local POST_INDICATOR_COLOR = Color3.fromRGB(255, 92, 92)
 
 type Role = "Seeker" | "Hider" | "Spectator"
 type TagTarget = Player | Model
@@ -96,6 +105,193 @@ configureSpawnMarker(seekerHoldingSpawn)
 for _, marker in hiderSpawns do
 	configureSpawnMarker(marker)
 end
+
+local seekerPostIndicator = Instance.new("Model")
+seekerPostIndicator.Name = "RuntimeSeekerPostIndicator"
+seekerPostIndicator:SetAttribute("RuntimeGenerated", true)
+
+local seekerPostIndicatorAnchor = Instance.new("Part")
+seekerPostIndicatorAnchor.Name = "Anchor"
+seekerPostIndicatorAnchor.Anchored = true
+seekerPostIndicatorAnchor.CanCollide = false
+seekerPostIndicatorAnchor.CanQuery = false
+seekerPostIndicatorAnchor.CanTouch = false
+seekerPostIndicatorAnchor.CastShadow = false
+seekerPostIndicatorAnchor.Size = Vector3.new(0.1, 0.1, 0.1)
+seekerPostIndicatorAnchor.Transparency = 1
+seekerPostIndicatorAnchor.Parent = seekerPostIndicator
+seekerPostIndicator.PrimaryPart = seekerPostIndicatorAnchor
+
+local seekerPostIndicatorFill = Instance.new("Part")
+seekerPostIndicatorFill.Name = "CaptureArea"
+seekerPostIndicatorFill.Anchored = true
+seekerPostIndicatorFill.CanCollide = false
+seekerPostIndicatorFill.CanQuery = false
+seekerPostIndicatorFill.CanTouch = false
+seekerPostIndicatorFill.CastShadow = false
+seekerPostIndicatorFill.Color = POST_INDICATOR_COLOR
+seekerPostIndicatorFill.Material = Enum.Material.Neon
+seekerPostIndicatorFill.Shape = Enum.PartType.Cylinder
+seekerPostIndicatorFill.Size = Vector3.new(
+	POST_INDICATOR_FILL_HEIGHT,
+	POST_CAPTURE_RADIUS * 2,
+	POST_CAPTURE_RADIUS * 2
+)
+seekerPostIndicatorFill.Transparency = 1
+seekerPostIndicatorFill.Parent = seekerPostIndicator
+
+local seekerPostIndicatorSegments: { Part } = {}
+local postIndicatorSegmentLength = (2 * math.pi * POST_CAPTURE_RADIUS / POST_INDICATOR_SEGMENT_COUNT) * 0.72
+for index = 1, POST_INDICATOR_SEGMENT_COUNT do
+	local segment = Instance.new("Part")
+	segment.Name = `Boundary{index}`
+	segment.Anchored = true
+	segment.CanCollide = false
+	segment.CanQuery = false
+	segment.CanTouch = false
+	segment.CastShadow = false
+	segment.Color = POST_INDICATOR_COLOR
+	segment.Material = Enum.Material.Neon
+	segment.Size = Vector3.new(0.32, POST_INDICATOR_BOUNDARY_HEIGHT, postIndicatorSegmentLength)
+	segment.Transparency = 1
+	segment.Parent = seekerPostIndicator
+	table.insert(seekerPostIndicatorSegments, segment)
+end
+
+local seekerPostBillboard = Instance.new("BillboardGui")
+seekerPostBillboard.Name = "Label"
+seekerPostBillboard.Adornee = seekerPostIndicatorAnchor
+seekerPostBillboard.AlwaysOnTop = true
+seekerPostBillboard.Enabled = false
+seekerPostBillboard.LightInfluence = 0
+seekerPostBillboard.MaxDistance = 250
+seekerPostBillboard.Size = UDim2.fromOffset(230, 58)
+seekerPostBillboard.StudsOffsetWorldSpace = Vector3.new(0, 3.8, 0)
+seekerPostBillboard.Parent = seekerPostIndicatorAnchor
+
+local seekerPostLabel = Instance.new("TextLabel")
+seekerPostLabel.BackgroundColor3 = Color3.fromRGB(15, 22, 34)
+seekerPostLabel.BackgroundTransparency = 0.16
+seekerPostLabel.BorderSizePixel = 0
+seekerPostLabel.Font = Enum.Font.GothamBold
+seekerPostLabel.Size = UDim2.fromScale(1, 1)
+seekerPostLabel.Text = "SEEKER POST\nRETURN TAGS HERE"
+seekerPostLabel.TextColor3 = Color3.fromRGB(255, 230, 230)
+seekerPostLabel.TextScaled = true
+seekerPostLabel.TextStrokeColor3 = Color3.fromRGB(40, 8, 12)
+seekerPostLabel.TextStrokeTransparency = 0.45
+seekerPostLabel.Parent = seekerPostBillboard
+
+local seekerPostLabelCorner = Instance.new("UICorner")
+seekerPostLabelCorner.CornerRadius = UDim.new(0, 10)
+seekerPostLabelCorner.Parent = seekerPostLabel
+
+local seekerPostLabelStroke = Instance.new("UIStroke")
+seekerPostLabelStroke.Color = POST_INDICATOR_COLOR
+seekerPostLabelStroke.Thickness = 2
+seekerPostLabelStroke.Transparency = 0.12
+seekerPostLabelStroke.Parent = seekerPostLabel
+
+local seekerPostLabelPadding = Instance.new("UIPadding")
+seekerPostLabelPadding.PaddingBottom = UDim.new(0, 5)
+seekerPostLabelPadding.PaddingLeft = UDim.new(0, 9)
+seekerPostLabelPadding.PaddingRight = UDim.new(0, 9)
+seekerPostLabelPadding.PaddingTop = UDim.new(0, 5)
+seekerPostLabelPadding.Parent = seekerPostLabel
+
+local seekerPostGroundRaycastParameters = RaycastParams.new()
+seekerPostGroundRaycastParameters.FilterType = Enum.RaycastFilterType.Exclude
+seekerPostGroundRaycastParameters.FilterDescendantsInstances = { roundSpawns, seekerPostIndicator }
+seekerPostGroundRaycastParameters.IgnoreWater = false
+
+local seekerPostSurfaceCFrame = CFrame.new()
+
+local function getHorizontalPostCFrame(height: number): CFrame
+	local postCFrame = seekerHoldingSpawn.CFrame
+	local horizontalLookVector = Vector3.new(postCFrame.LookVector.X, 0, postCFrame.LookVector.Z)
+	if horizontalLookVector.Magnitude < 0.001 then
+		horizontalLookVector = Vector3.new(0, 0, -1)
+	else
+		horizontalLookVector = horizontalLookVector.Unit
+	end
+
+	local position = Vector3.new(postCFrame.Position.X, height, postCFrame.Position.Z)
+	return CFrame.lookAt(position, position + horizontalLookVector)
+end
+
+local function getSeekerPostGroundHeight(horizontalPostCFrame: CFrame): number
+	local groundHeights: { number } = {}
+	for sampleIndex = 1, POST_GROUND_SAMPLE_COUNT do
+		local angle = (sampleIndex - 1) / POST_GROUND_SAMPLE_COUNT * 2 * math.pi
+		local sampleOrigin = horizontalPostCFrame:PointToWorldSpace(Vector3.new(
+			math.cos(angle) * POST_GROUND_SAMPLE_RADIUS,
+			POST_GROUND_RAY_START_HEIGHT,
+			math.sin(angle) * POST_GROUND_SAMPLE_RADIUS
+		))
+		local result = Workspace:Raycast(
+			sampleOrigin,
+			Vector3.new(0, -POST_GROUND_RAY_LENGTH, 0),
+			seekerPostGroundRaycastParameters
+		)
+		if result then
+			table.insert(groundHeights, result.Position.Y)
+		end
+	end
+
+	if #groundHeights == 0 then
+		return seekerHoldingSpawn.Position.Y
+	end
+
+	table.sort(groundHeights)
+	local middleIndex = math.floor((#groundHeights + 1) / 2)
+	if #groundHeights % 2 == 0 then
+		return (groundHeights[middleIndex] + groundHeights[middleIndex + 1]) / 2
+	end
+
+	return groundHeights[middleIndex]
+end
+
+local function updateSeekerPostIndicatorTransform()
+	local horizontalPostCFrame = getHorizontalPostCFrame(seekerHoldingSpawn.Position.Y)
+	local groundHeight = getSeekerPostGroundHeight(horizontalPostCFrame)
+	seekerPostSurfaceCFrame = getHorizontalPostCFrame(groundHeight)
+	seekerPostIndicatorAnchor.CFrame = seekerPostSurfaceCFrame
+	seekerPostIndicatorFill.CFrame = seekerPostSurfaceCFrame
+		* CFrame.new(0, POST_INDICATOR_FILL_HEIGHT / 2 + POST_INDICATOR_SURFACE_GAP, 0)
+		* CFrame.Angles(0, 0, math.rad(90))
+
+	for index, segment in seekerPostIndicatorSegments do
+		local angle = (index - 1) / POST_INDICATOR_SEGMENT_COUNT * 2 * math.pi
+		local relativePosition = Vector3.new(
+			math.cos(angle) * POST_CAPTURE_RADIUS,
+			POST_INDICATOR_BOUNDARY_HEIGHT / 2 + POST_INDICATOR_SURFACE_GAP,
+			math.sin(angle) * POST_CAPTURE_RADIUS
+		)
+		local worldPosition = seekerPostSurfaceCFrame:PointToWorldSpace(relativePosition)
+		local tangent = seekerPostSurfaceCFrame:VectorToWorldSpace(Vector3.new(-math.sin(angle), 0, math.cos(angle)))
+		segment.CFrame = CFrame.lookAt(worldPosition, worldPosition + tangent, seekerPostSurfaceCFrame.UpVector)
+	end
+end
+
+local function getPlanarDistanceFromSeekerPost(position: Vector3): number
+	local relativePosition = seekerPostSurfaceCFrame:PointToObjectSpace(position)
+	return Vector2.new(relativePosition.X, relativePosition.Z).Magnitude
+end
+
+local function updateSeekerPostIndicatorVisibility()
+	local visible = roundState:GetAttribute("Phase") == SEEKING_PHASE
+	seekerPostIndicatorFill.Transparency = if visible then 0.76 else 1
+	for _, segment in seekerPostIndicatorSegments do
+		segment.Transparency = if visible then 0.08 else 1
+	end
+	seekerPostBillboard.Enabled = visible
+end
+
+seekerPostIndicator.Parent = Workspace
+updateSeekerPostIndicatorTransform()
+updateSeekerPostIndicatorVisibility()
+seekerHoldingSpawn:GetPropertyChangedSignal("CFrame"):Connect(updateSeekerPostIndicatorTransform)
+roundState:GetAttributeChangedSignal("Phase"):Connect(updateSeekerPostIndicatorVisibility)
 
 local generation = 0
 local lastResetAt = 0
@@ -460,6 +656,21 @@ end
 
 local function pivotCharacterToAssignedSpawn(player: Player, character: Model)
 	local marker = getAssignedSpawn(player)
+	if marker == seekerHoldingSpawn then
+		-- Local +Z is behind the marker. Use an explicit look-at transform so
+		-- character pivot offsets cannot introduce an angular error.
+		local spawnPosition = seekerPostSurfaceCFrame:PointToWorldSpace(
+			Vector3.new(0, CHARACTER_SPAWN_OFFSET, POST_CAPTURE_RADIUS)
+		)
+		local postTarget = Vector3.new(
+			seekerPostSurfaceCFrame.Position.X,
+			spawnPosition.Y,
+			seekerPostSurfaceCFrame.Position.Z
+		)
+		character:PivotTo(CFrame.lookAt(spawnPosition, postTarget))
+		return
+	end
+
 	local waitingOffset = if marker == waitingSpawn then getWaitingSpawnOffset(player) else Vector3.zero
 	character:PivotTo(marker.CFrame * CFrame.new(waitingOffset.X, CHARACTER_SPAWN_OFFSET, waitingOffset.Z))
 end
@@ -894,7 +1105,7 @@ local function handleTagRequest(player: Player, cameraOrigin: unknown, cameraDir
 		local seekerRoot = character:FindFirstChild("HumanoidRootPart")
 		seekerWasAwayFromPost = seekerRoot ~= nil
 			and seekerRoot:IsA("BasePart")
-			and (seekerRoot.Position - seekerHoldingSpawn.Position).Magnitude > POST_AWAY_RADIUS
+			and getPlanarDistanceFromSeekerPost(seekerRoot.Position) > POST_AWAY_RADIUS
 	end
 end
 
@@ -980,7 +1191,7 @@ RunService.Heartbeat:Connect(function()
 		return
 	end
 
-	local distanceFromPost = (seekerRoot.Position - seekerHoldingSpawn.Position).Magnitude
+	local distanceFromPost = getPlanarDistanceFromSeekerPost(seekerRoot.Position)
 	if distanceFromPost > POST_AWAY_RADIUS then
 		seekerWasAwayFromPost = true
 	elseif seekerWasAwayFromPost and distanceFromPost <= POST_CAPTURE_RADIUS then

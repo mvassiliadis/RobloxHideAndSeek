@@ -101,16 +101,17 @@ WaitingToStart -> SelectingRoles -> Hiding -> Seeking
 - Default duration: **30 seconds**.
 - A large synchronized countdown appears at the top center of the screen.
 - The last five seconds turn red and pulse.
-- The seeker waits at `SeekerHoldingSpawn`; hiders occupy unique, shuffled markers beneath `HiderSpawns`; spectators remain in distinct slots around `WaitingSpawn`.
-- While Hiding, the server anchors the seeker's `HumanoidRootPart` at the holding marker so temporary or open holding areas cannot be escaped. The root is unanchored before release, on reset, and when assignments are cleared.
-- When the countdown finishes, the server releases the seeker in place at `SeekerHoldingSpawn` and changes the phase to `Seeking`.
+- The seeker waits on the capture-area edge behind `SeekerHoldingSpawn`, facing the post; hiders occupy unique, shuffled markers beneath `HiderSpawns`; spectators remain in distinct slots around `WaitingSpawn`.
+- While Hiding, the server anchors the seeker's `HumanoidRootPart` at that edge position so temporary or open holding areas cannot be escaped. The root is unanchored before release, on reset, and when assignments are cleared.
+- When the countdown finishes, the server releases the seeker in place at the post indicator's edge and changes the phase to `Seeking`.
 
 ### 4. Seeking
 
 - The seeker gets a center-screen crosshair and can point at a visible hider and left-click to tag them.
 - The server raycasts the submitted first-person aim, enforces a 300-stud maximum range, and accepts only living hiders with unobstructed line of sight.
 - The seeker can tag any number of currently active hiders before returning to the post. Tagged hiders remain active in the world until the tags are banked.
-- Returning to `SeekerHoldingSpawn` eliminates every currently tagged hider at once. The seeker must have moved outside the post's 12-stud outer radius before entering its 8-stud capture radius, so respawning at the post cannot bank tags.
+- Returning to `SeekerHoldingSpawn` eliminates every currently tagged hider at once. Horizontal distance is measured against the post indicator: the seeker must have moved outside its 12-stud outer radius before entering its 8-stud capture radius, so respawning at the post cannot bank tags.
+- During Seeking, the server raycasts around the post perimeter to generate a ground-flush, non-colliding red capture-area disc, segmented boundary, and floating label. The indicator follows `SeekerHoldingSpawn` if the marker moves and is never baked into the Studio-authored map.
 - Eliminated real hiders become spectators and move to their waiting-area slots; eliminated practice mannequins are removed.
 - A right-side **HIDER ROSTER** groups every round hider under **ACTIVE**, **TAGGED**, or **ELIMINATED**, with player avatars, names, counts, and practice-bot fallbacks.
 - Eliminating the final hider displays the completed roster for two seconds, then automatically resets the round and starts a new round when enough players remain.
@@ -265,6 +266,7 @@ Responsibilities:
 - Give every connected player a stable waiting-area slot on a six-stud grid around `WaitingSpawn`, reclaiming the slot when they leave.
 - Reset when the seeker or final hider leaves, while allowing rounds to continue after spectator departures or a non-final hider departure.
 - Validate seeker aim and line of sight, track multiple pending tags, and eliminate the full tagged group when the seeker returns to the holding post.
+- Generate and maintain the Seeking-only visual indicator for the post's 8-stud capture area at runtime.
 - Replicate the ordered hider roster and its Active, Tagged, and Eliminated transitions as JSON.
 - Promote eliminated hiders to spectators and reset automatically after the final hider is eliminated.
 - In Studio, create and clean up one-player practice rounds with configurable, raycastable hider mannequins.
@@ -290,6 +292,7 @@ Responsibilities:
 - Manage Alt-based desktop cursor interaction.
 - Display the discreet bottom-left controls guide on keyboard devices.
 - Apply the macOS first-person cursor startup/respawn refresh.
+- Align the seeker's first-person camera directly with the center of `SeekerHoldingSpawn` when entering Hiding or Seeking and after respawn.
 
 Clients do not choose or submit roles, decide phase transitions, or directly mutate server state.
 
@@ -307,7 +310,7 @@ The connected Match place now contains the required marker hierarchy. The marker
 | `Hider4` | `(30, 1, 40)` |
 
 - A map designer must deliberately reposition and orient all six markers for the final waiting area, seeker enclosure, and hiding map.
-- Marker `CFrame` orientation controls the direction a respawned character faces.
+- Marker `CFrame` orientation controls the direction a respawned character faces. The seeker specifically uses the `SeekerHoldingSpawn` marker's backward (`+Z`) edge and therefore faces forward toward its center.
 - Every marker is currently a `4 x 1 x 4` anchored Part with transparency `1` and collision, touch, and query disabled.
 - `Workspace.Obstacles.SeekerSpotTriggerDecal` was removed from the connected Match place because it served only the obsolete activation boundary.
 - `Workspace.Obstacles.SeekerSpot` was retained as a visible map object because inspection did not prove it had no remaining map purpose. The controller no longer references it.
@@ -342,13 +345,14 @@ Then use Studio's **Server & Clients** test mode with two through five clients. 
 - Two through five clients produce exactly one `Seeker`, between one and four `Hider` attributes, no spectators, and unique hider marker assignments.
 - A waiting roster change restarts the startup countdown; dropping below two cancels it.
 - After startup, all clients show the same candidate icons for five seconds, slow onto the selected seeker, and receive no active role attribute until the reveal completes.
-- The seeker begins at `SeekerHoldingSpawn` and is unanchored there when Seeking begins.
+- The seeker begins eight studs behind `SeekerHoldingSpawn` on the indicator edge, with both character and first-person camera aimed directly at the post center, and is unanchored there when Seeking begins. Rotate the marker to choose the side where the seeker waits.
 - A reset clears role attributes, spreads everyone around `WaitingSpawn`, and automatically schedules a fresh random selection when at least two players remain.
 - Respawning returns a participant to the spawn appropriate for their current role and phase.
 - A seeker departure or final-hider departure resets; one hider leaving while another remains continues; spectator departure does not affect the round.
 - A seeker click only tags a living hider directly under the crosshair with unobstructed line of sight; walls and non-hider characters block the ray.
 - Multiple distinct hiders can be tagged before returning, while duplicate clicks on an already-tagged hider are ignored.
 - The seeker must cross outside the post's outer radius before returning; character reset/respawn at the post does not eliminate pending hiders.
+- The runtime post indicator appears only during Seeking, sits flush on the sampled ground, matches the horizontal 8-stud capture radius, and follows the marker after a `CFrame` change.
 - One return promotes every tagged real hider to spectator and removes every tagged practice hider.
 - All three roster sections and counts update together, and eliminating the final hider resets after the two-second completion display.
 - Late joiners during Hiding or Seeking receive `Spectator` and stay in separate slots around `WaitingSpawn`.

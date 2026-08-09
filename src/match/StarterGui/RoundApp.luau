@@ -133,6 +133,7 @@ local function RoundApp()
 	local rHeldRef = React.useRef(false)
 	local rHoldGenerationRef = React.useRef(0)
 	local altHeldRef = React.useRef(false)
+	local cameraSnapGenerationRef = React.useRef(0)
 	local resetButtonRef = React.useRef(nil)
 	local pulseScaleRef = React.useRef(nil)
 
@@ -181,6 +182,49 @@ local function RoundApp()
 
 			if mountedRef.current and not altHeldRef.current then
 				setCursorMode(false)
+			end
+		end)
+	end
+
+	local function snapSeekerCameraToPost()
+		cameraSnapGenerationRef.current += 1
+		local thisGeneration = cameraSnapGenerationRef.current
+
+		task.spawn(function()
+			local character = localPlayer.Character
+			if not character then
+				return
+			end
+
+			local head = character:WaitForChild("Head", 2)
+			if not head or not head:IsA("BasePart") then
+				return
+			end
+
+			-- Wait for the assigned-spawn pivot and Roblox's camera script.
+			task.wait(0.1)
+			for _ = 1, 3 do
+				RunService.RenderStepped:Wait()
+				local currentPhase = roundState:GetAttribute("Phase")
+				if not mountedRef.current
+					or thisGeneration ~= cameraSnapGenerationRef.current
+					or localPlayer:GetAttribute("Role") ~= "Seeker"
+					or (currentPhase ~= "Hiding" and currentPhase ~= "Seeking")
+				then
+					return
+				end
+
+				local roundSpawns = Workspace:FindFirstChild("RoundSpawns")
+				local post = roundSpawns and roundSpawns:FindFirstChild("SeekerHoldingSpawn")
+				local camera = Workspace.CurrentCamera
+				if not post or not post:IsA("BasePart") or not camera then
+					return
+				end
+
+				local cameraPosition = camera.CFrame.Position
+				if (post.Position - cameraPosition).Magnitude > 0.01 then
+					camera.CFrame = CFrame.lookAt(cameraPosition, post.Position)
+				end
 			end
 		end)
 	end
@@ -249,7 +293,11 @@ local function RoundApp()
 
 		local connections = {
 			roundState:GetAttributeChangedSignal("Phase"):Connect(function()
-				setPhase(roundState:GetAttribute("Phase"))
+				local nextPhase = roundState:GetAttribute("Phase")
+				setPhase(nextPhase)
+				if nextPhase == "Hiding" or nextPhase == "Seeking" then
+					snapSeekerCameraToPost()
+				end
 			end),
 			roundState:GetAttributeChangedSignal("TimeRemaining"):Connect(function()
 				setTimeRemaining(roundState:GetAttribute("TimeRemaining"))
@@ -279,7 +327,11 @@ local function RoundApp()
 				setPracticeModeActive(roundState:GetAttribute("PracticeModeActive"))
 			end),
 			localPlayer:GetAttributeChangedSignal("Role"):Connect(function()
-				setRole(localPlayer:GetAttribute("Role"))
+				local nextRole = localPlayer:GetAttribute("Role")
+				setRole(nextRole)
+				if nextRole == "Seeker" then
+					snapSeekerCameraToPost()
+				end
 			end),
 			returnToLobbyRequested.OnClientEvent:Connect(function(status: string)
 				if status ~= "Failed" then
@@ -328,15 +380,20 @@ local function RoundApp()
 				cancelKeyboardReset()
 				setCursorMode(false)
 			end),
-			localPlayer.CharacterAdded:Connect(refreshLockedCursor),
+			localPlayer.CharacterAdded:Connect(function()
+				refreshLockedCursor()
+				snapSeekerCameraToPost()
+			end),
 		}
 
 		refreshLockedCursor()
+		snapSeekerCameraToPost()
 
 		return function()
 			mountedRef.current = false
 			rHeldRef.current = false
 			rHoldGenerationRef.current += 1
+			cameraSnapGenerationRef.current += 1
 			for _, connection in connections do
 				connection:Disconnect()
 			end
